@@ -1,6 +1,6 @@
 ---
 title: "LSABD group project – Part 1b: preprocessing"
-author: "Group XX"
+author: "Group PG 5"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -9,6 +9,18 @@ output:
     number_sections: true
     code_folding: show
 ---
+
+<!--
+PURPOSE  General preprocessing of the raw NHANES file: confirmed data-quality issues are
+         fixed, nothing is removed that a later part might need. Analysis-specific steps
+         (feature selection, transformations, scaling) happen in Parts 2, 3 and 4.
+INPUT    data/raw/NHANES_20212023_merged_filtered_1.csv + codebook
+OUTPUT   data/processed/nhanes_clean.csv    all 11,933 participants, 485 variables
+                                            + flag analysis_population
+         data/processed/variable_info.csv   one row per variable: type, unit duplicate,
+                                            % missing, % below the LOD
+RULE     Parts 2-4 read the clean data with load_clean_data() and never repeat these steps.
+-->
 
 ## Data preprocessing
 
@@ -224,6 +236,108 @@ The need for transformation depends on the distribution of individual variables 
 
 Transformations and scaling will therefore be performed separately when required by subsequent analyses.
 
+### Shared analysis population
+In line with the decision above, no participants are removed. However, Parts 2, 3 and 4 all analyse examination and laboratory measurements in adults, and they should do so in exactly the same group of people, so that sample sizes and results can be compared between parts. This group is therefore defined once, here, as a flag (`analysis_population`) instead of a filter:
+
+- examined participants (`RIDSTATR`), because only they have examination and laboratory data;
+- aged 20 years or older, because several adult variables, such as education level, are only collected from age 20;
+- not pregnant at examination (`RIDEXPRG` = 1 excluded), because pregnancy changes body measurements such as waist circumference and blood measurements such as HbA1c. Participants whose pregnancy status could not be determined (`RIDEXPRG` = 3) are kept.
+
+```{r analysis-population}
+nhanes_clean <- nhanes_clean %>%
+  mutate(
+    analysis_population = RIDSTATR == "Examined" &
+      RIDAGEYR >= 20 &
+      (is.na(RIDEXPRG) | RIDEXPRG != 1)
+  )
+
+tibble(
+  step = c("All participants", "Examined", "Aged 20 years or older",
+           "Not pregnant (analysis population)"),
+  n = c(
+    nrow(nhanes_clean),
+    sum(nhanes_clean$RIDSTATR == "Examined"),
+    sum(nhanes_clean$RIDSTATR == "Examined" & nhanes_clean$RIDAGEYR >= 20),
+    sum(nhanes_clean$analysis_population)
+  )
+)
+```
+
+Later parts select this group with `filter(analysis_population)` and then handle missing values for their own variables only.
+
+### Variable information for later parts
+To make the feature selection in later parts consistent and reproducible, the variable classification from the exploratory analysis is stored together with three properties per variable:
+
+- `unit_duplicate`: the same measurement reported a second time in another unit. These are detected as two measurement variables from the same NHANES file whose labels are identical apart from the unit in brackets; the first one is kept as the primary version.
+- `pct_missing` and `pct_missing_analysis`: the percentage of missing values in all participants and in the analysis population.
+- `pct_below_lod`: the percentage of values below the limit of detection in the analysis population, linked from the corresponding laboratory comment code.
+
+No transformation is decided here (`transform` = "none"), in line with the decision to transform per analysis.
+
+```{r variable-info}
+# Same classification rules as in 01_exploration
+ordinal_vars  <- c("DMDEDUC2", "DMDHREDZ", "DMDHSEDZ", "DMDHRAGZ", "ALQ121", "ALQ142", "ALQ270", "ALQ280",
+                   "BPAOCSZ", "BMDBMIC", "WHQ030E", "DBQ390", "DBQ421", "DBQ424", "RIDEXMON", "DMDYRUSR")
+discrete_vars <- c("RIDAGEYR", "RIDAGEMN", "RIDEXAGM", "DMDHHSIZ", "ALQ130", "ALQ170", "DBD381", "DBD411",
+                   "ECD070A", "ECD070B", "DBD030", "DBD041", "DBD050", "DBD055", "DBD061")
+
+analysis_data <- nhanes_clean %>% filter(analysis_population)
+
+variable_info <- codebook %>%
+  filter(variable %in% names(nhanes_clean)) %>%
+  mutate(
+    position = match(variable, names(nhanes_clean)),
+    n_unique = sapply(nhanes_clean[variable], function(x) length(unique(na.omit(x)))),
+    type = case_when(
+      variable == "SEQN" ~ "identifier",
+      grepl("^WT", variable) | variable %in% c("SDMVSTRA", "SDMVPSU", "SDDSRVYR") ~ "survey design / weight",
+      grepl("comment|comt|cmt", label, ignore.case = TRUE) ~ "comment code",
+      variable %in% ordinal_vars ~ "ordinal",
+      variable %in% discrete_vars ~ "discrete",
+      !sapply(nhanes_clean[variable], is.numeric) | n_unique <= 12 ~ "nominal",
+      TRUE ~ "continuous"
+    ),
+    base_label = str_trim(str_remove(label, "\\s*\\([^()]*\\)\\s*$")),
+    pct_missing = sapply(nhanes_clean[variable], function(x) mean(is.na(x)) * 100),
+    pct_missing_analysis = sapply(analysis_data[variable], function(x) mean(is.na(x)) * 100)
+  ) %>%
+  # FASTQX_L is excluded: there "(hours)" and "(minutes)" are two parts of one duration
+  group_by(file, base_label) %>%
+  mutate(unit_duplicate = type %in% c("continuous", "discrete") & file != "FASTQX_L" &
+           row_number() > 1) %>%
+  ungroup()
+
+# Link every laboratory comment code to its measurement: the nearest preceding
+# measurement variable in the same NHANES file.
+comment_codes <- variable_info %>%
+  filter(type == "comment code", component == "Laboratory")
+measurements <- variable_info %>%
+  filter(type %in% c("continuous", "discrete"), !unit_duplicate)
+
+lod_link <- comment_codes %>%
+  rowwise() %>%
+  mutate(measured = {
+    candidates <- measurements[measurements$file == file & measurements$position < position, ]
+    if (nrow(candidates) == 0) NA_character_ else candidates$variable[which.max(candidates$position)]
+  }) %>%
+  ungroup() %>%
+  transmute(variable = measured,
+            pct_below_lod = sapply(analysis_data[comment_codes$variable],
+                                   function(x) mean(x == 1, na.rm = TRUE) * 100))
+
+variable_info <- variable_info %>%
+  left_join(lod_link, by = "variable") %>%
+  mutate(transform = "none", offset = 0) %>%
+  select(variable, label, file, component, type, unit_duplicate,
+         pct_missing, pct_missing_analysis, pct_below_lod, transform, offset)
+
+count(variable_info, type)
+sum(variable_info$unit_duplicate)
+variable_info %>%
+  filter(!is.na(pct_below_lod)) %>%
+  summarise(lab_tests_with_lod = n(), more_than_half_below_lod = sum(pct_below_lod > 50))
+```
+
 ### Summary of preprocessing decision
 
 | Data quality issue | Preprocessing decision |
@@ -239,124 +353,59 @@ Transformations and scaling will therefore be performed separately when required
 | Values below the LOD | Retained as provided by NHANES |
 | Redundant variables | Retained |
 | Transformations and scaling | Deferred to subsequent analyses |
+| Analysis population | Flagged (examined, aged 20 years or older, not pregnant); no participants removed |
+| Variable information | Type, unit duplicates, missingness and % below the LOD stored in `variable_info.csv` |
 
 General preprocessing addressed confirmed data quality issues while preserving the available biological and clinical information. No research question-specific participant or feature selection was performed. Further preprocessing will depend on the objectives and statistical requirements of subsequent analyses.
 
 ## Quality control after preprocessing
-
-## Summary and suitability for further analyssis
-
-<!--
-PURPOSE  Turn the raw NHANES file into ONE clean dataset that Parts 2, 3 and 4
-         all use. Every step is justified by a finding in 01_exploration.
-INPUT    data/raw/NHANES_20212023_merged_filtered_1.csv + codebook
-OUTPUT   data/processed/nhanes_clean.csv     (participants x selected variables)
-         data/processed/variable_info.csv    (one row per kept variable: label, role, transformation)
-OWNER    Person 1
-RULE     Downstream scripts never repeat cleaning steps: if something needs to
-         change, change it HERE and re-knit, so every part uses the same data.
--->
-
-```{r setup, include = FALSE}
-source(here::here("R", "utils.R"))
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
-                      fig.width = 9, fig.height = 5, dpi = 150,
-                      dev = c("png", "cairo_pdf"),
-                      fig.path = file.path(paths$figures, "02_preprocessing", ""))
-```
-
-```{r load}
-nhanes_raw <- load_raw_data()
-codebook   <- load_codebook()
-dim(nhanes_raw)
-```
-
-# Study population
-
-<!-- TODO: which participants are analysed, and why?
-     e.g. examined participants only (RIDSTATR == 2), adults (RIDAGEYR >= 20),
-     pregnant women excluded (RIDEXPRG == 1). Report how many are removed per step. -->
-
-```{r population}
-nhanes_clean <- nhanes_raw   # TODO: filter()
-
-# Keep a log of every step: rows left after each filter (useful for a flow diagram)
-```
-
-# Variable selection
-
-<!-- TODO: drop columns that are not features: survey weights / design variables,
-     comment codes (keep the LOD flags you need first), unit duplicates (SI copies),
-     completely empty variables (BMIHEAD). -->
-
-```{r variables}
-```
-
-# Disguised missing values
-
-<!-- TODO: recode "refused" / "don't know" codes (7/9, 77/99, 777/999, ...) to NA
-     for the variables flagged in 01_exploration section 5.1. -->
-
-```{r special-codes}
-```
-
-# Values below the limit of detection
-
-<!-- TODO: decide per variable: drop variables with > 50 % below LOD; for the
-     others keep the NHANES substitute (LOD / sqrt(2)) and state this. -->
-
-```{r lod}
-```
-
-# Missing values
-
-<!-- TODO: per variable, decide: restrict to the eligible group (structural
-     missingness), complete-case analysis, or imputation (only for non-response,
-     and say which method). Report what you did and how many values it affects. -->
-
-```{r missing}
-```
-
-# Transformations
-
-<!-- TODO: log-transform right-skewed variables (skewness > 1); recode categorical
-     variables as labelled factors (sex, ethnicity, education); average the three
-     blood pressure readings. Standardisation (z-scores) is done later inside the
-     analyses that need it (PCA, ML), not here. -->
-
-```{r transformations}
-```
-
-# Outliers
-
-<!-- TODO: check extremes against related variables (repeated BP readings,
-     glucose vs HbA1c, ...). Remove only proven errors; document every removal. -->
-
-```{r outliers}
-```
-
-# Quality check after preprocessing
-
-<!-- TODO: re-run a PCA / summary on the clean data and compare with 01_exploration:
-     do samples now group by biology rather than by technical factors? -->
+The preprocessing should only change what was intended. Three checks confirm this: the participants are the same, only the recoded variables gained missing values, and every other variable is unchanged.
 
 ```{r qc}
+# Same participants, in the same order
+identical(nhanes_raw$SEQN, nhanes_clean$SEQN)
+
+# Variables that were intentionally changed or added
+changed_vars <- c("DMDEDUC2", "DMDMARTZ", "RIAGENDR", "RIDSTATR", "RIDRETH3")
+added_vars   <- "analysis_population"
+removed_vars <- setdiff(names(nhanes_raw), names(nhanes_clean))
+removed_vars
+
+# All other variables are identical to the raw data
+unchanged_vars <- setdiff(names(nhanes_clean), c(changed_vars, added_vars))
+all(sapply(unchanged_vars, function(v) identical(nhanes_raw[[v]], nhanes_clean[[v]])))
+
+# Extra missing values come only from the recoded special response codes
+tibble(
+  variable = changed_vars,
+  missing_raw = colSums(is.na(nhanes_raw[changed_vars])),
+  missing_clean = colSums(is.na(nhanes_clean[changed_vars]))
+)
 ```
 
-# Save the clean dataset
+## Summary and suitability for further analysis
+The working dataset contains all 11,933 participants and 485 of the 486 original variables, plus the `analysis_population` flag. Confirmed special response codes were recoded, the completely missing variable was removed and key demographic variables were converted to factors. All other values are identical to the raw data.
+
+The dataset is suitable for the subsequent analyses, provided that each part:
+
+- selects the shared analysis population with `filter(analysis_population)`;
+- chooses its variables with `variable_info.csv`, keeping one version of each unit duplicate and taking the proportion below the LOD into account;
+- handles missing values, transformations and scaling for its own variables, and reports how.
+
+## Save the clean dataset
+A CSV file does not store factor levels; `load_clean_data()` in `R/utils.R` restores them when the data are read back in.
 
 ```{r save}
 dir.create(dirname(paths$clean_data), recursive = TRUE, showWarnings = FALSE)
 write_csv(nhanes_clean, paths$clean_data)
-
-variable_info <- codebook %>% filter(variable %in% names(nhanes_clean))
 write_csv(variable_info, paths$clean_vars)
 
 dim(nhanes_clean)
 ```
 
-# Session information
+## Session information
 
 ```{r session-info}
 sessionInfo()
 ```
+

@@ -1,5 +1,6 @@
 ---
-title: "group_project"
+title: "LSABD group project – Part 1a: exploration of the raw NHANES 2021–2023 data"
+author: "Group PG 5"
 output: 
   html_document:
     toc: TRUE
@@ -13,17 +14,21 @@ date: "2026-11-22"
 ## Setup 
 ### loading packages
 
-```{r}
-library(tidyverse)
+```{r setup, message = FALSE}
+# R/utils.R loads the tidyverse, the project paths and the house style
+# (fonts, colours, ggplot theme), so all figures look the same in every part.
+source(here::here("R", "utils.R"))
+knitr::opts_chunk$set(message = FALSE)
 ```
 
 ### Importing the datasets
-The provided NHANES dataset and its corresponding codebook were imported using read_csv(). The original dataset is retained throughout the project to allow comparisons before and after preprocessing.
+The provided NHANES dataset and its corresponding codebook were imported from `data/raw/` with the shared loaders in `R/utils.R`, which call `read_csv()`. The original dataset is retained throughout the project to allow comparisons before and after preprocessing.
+
+Two import details matter. The data are read with `guess_max = 20000`, because many columns are empty in the first 1,000 rows and would otherwise get the wrong type. The codebook is encoded as Windows-1252 rather than UTF-8; reading it with the default encoding garbles labels such as "HH ref person's gender" and makes text searches on the labels fail.
 
 ```{r}
-nhanes <- read_csv("NHANES_20212023_merged_filtered 1.csv",
-                   guess_max = 20000)
-codebook <- read_csv("NHANES_20212023_codebook_filtered 1.csv")
+nhanes   <- load_raw_data()   # read_csv(..., guess_max = 20000)
+codebook <- load_codebook()   # read_csv(..., locale = locale(encoding = "windows-1252"))
 ```
 
 ## Dataset description 
@@ -70,13 +75,12 @@ The number of variables belonging to each NHANES component was calculated to obt
 
 ```{r}
 ggplot(codebook, aes(x = component)) +
-  geom_bar(fill = "steelblue") +
+  geom_bar(fill = lsabd$teal) +
   labs(
     title = "Distribution of variables across NHANES components",
     x = "NHANES component",
     y = "Number of variables"
-  ) +
-  theme_minimal()
+  )
 ```
 
 The dataset contains variables from four NHANES components: Demographics (27), Examination (32), Laboratory (387) and Questionnaire (40). Most variables belong to the Laboratory component (79.6%), indicating that laboratory-related measurements make up the largest part of the dataset in terms of variable count.
@@ -175,7 +179,7 @@ ggplot(variable_types, aes(x = component, fill = type)) +
     y = "Number of variables",
     fill = "Variable type"
   ) +
-  theme_minimal()
+  scale_fill_cat()
 ```
 
 Most laboratory variables are continuous measurements, but a large group consists of comment codes that describe
@@ -260,13 +264,12 @@ missing_variables <- missing_variables %>%
   ))
 
 ggplot(missing_variables, aes(x = missing_group)) +
-  geom_bar(fill = "steelblue") +
+  geom_bar(fill = lsabd$teal) +
   labs(
     title = "Distribution of missingness across variables",
     x = "Percentage of missing values",
     y = "Number of variables"
-  ) +
-  theme_minimal()
+  )
 ```
 
 The proportion of missing values varies considerably between variables. Only 12 variables contain no missing values, while the majority of variables (281 out of 486) contain between 25% and 50% missing values. Furthermore, 191 variables contain more than 50% missing values, including 35 variables with more than 90% missing values.
@@ -303,13 +306,12 @@ summary(missing_participants$missing_percentage)
 
 ```{r}
 ggplot(missing_participants, aes(x = missing_percentage)) +
-  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  geom_histogram(bins = 30, fill = lsabd$teal, color = "white") +
   labs(
     title = "Distribution of missingness across participants",
     x = "Percentage of missing values",
     y = "Number of participants"
-  ) +
-  theme_minimal()
+  )
 ```
 
 Missingness varies considerably between participants, ranging from 10.91% to 97.53%. The median percentage of missing values is 38.27%, whereas the mean is higher (53.49%). In addition, the third quartile is 93.21%, indicating that a substantial group of participants has very limited available information.
@@ -334,13 +336,12 @@ missing_components
 ```{r}
 ggplot(missing_components,
        aes(x = component, y = mean_missing)) +
-  geom_col(fill = "steelblue") +
+  geom_col(fill = lsabd$teal) +
   labs(
     title = "Mean missingness by NHANES component",
     x = "NHANES component",
     y = "Mean percentage of missing values"
-  ) +
-  theme_minimal()
+  )
 ```
 
 The Questionnaire component has the highest average percentage of missing values (76.29%), followed by Examination (57.63%) and Laboratory (52.37%). The Demographics component has the lowest average missingness (30.97%).
@@ -378,13 +379,12 @@ missing_participants %>%
 ```{r}
 ggplot(missing_participants,
        aes(x = examination_status, y = missing_percentage)) +
-  geom_boxplot(fill = "steelblue") +
+  geom_boxplot(fill = lsabd$teal) +
   labs(
     title = "Missingness by examination status",
     x = "Examination status",
     y = "Percentage of missing values"
-  ) +
-  theme_minimal()
+  )
 ```
 
 Of the 11,933 participants, 3,073 only completed the interview, whereas 8,860 participated in both the interview and the physical examination.
@@ -427,13 +427,12 @@ missing_examined %>%
 ```{r}
 ggplot(missing_examined,
        aes(x = age_group, y = missing_percentage)) +
-  geom_boxplot(fill = "steelblue") +
+  geom_boxplot(fill = lsabd$teal) +
   labs(
     title = "Missingness by age group among examined participants",
     x = "Age group (years)",
     y = "Percentage of missing values"
-  ) +
-  theme_minimal()
+  )
 ```
 
 Among examined participants, missingness is highest in the youngest age groups. Participants aged 0–5 years have an average missingness of 80.68%, followed by participants aged 6–12 years (57.79%). In contrast, the average missingness among adult age groups is approximately 31–32%.
@@ -530,27 +529,25 @@ Two examples are age (RIDAGEYR), which is top-coded at 80 years, and the family 
 
 ```{r}
 ggplot(nhanes, aes(x = RIDAGEYR)) +
-  geom_histogram(binwidth = 1, fill = "steelblue",
+  geom_histogram(binwidth = 1, fill = lsabd$teal,
                  color = "white", boundary = 0.5) +
   labs(
     title = "Distribution of participant age",
     x = "Age (years)",
     y = "Number of participants"
-  ) +
-  theme_minimal()
+  )
 ```
 
 ```{r}
 ggplot(nhanes, aes(x = INDFMPIR)) +
-  geom_histogram(binwidth = 0.1, fill = "steelblue",
+  geom_histogram(binwidth = 0.1, fill = lsabd$teal,
                  color = "white", na.rm = TRUE,
                  boundary = 0.05) +
   labs(
     title = "Distribution of family income-to-poverty ratio",
     x = "Income-to-poverty ratio",
     y = "Number of participants"
-  ) +
-  theme_minimal()
+  )
 ```
 
 ```{r}
@@ -628,14 +625,13 @@ lod_summary %>%
     x = reorder(variable, percentage_below_lod),
     y = percentage_below_lod
   )) +
-  geom_col(fill = "steelblue") +
+  geom_col(fill = lsabd$teal) +
   coord_flip() +
   labs(
     title = "Laboratory variables with the highest proportion below LOD",
     x = "Laboratory comment variable",
     y = "Percentage below LOD"
-  ) +
-  theme_minimal()
+  )
 ```
 
 #### Interpretation 
@@ -670,15 +666,14 @@ distribution_data <- nhanes %>%
 
 ```{r}
 ggplot(distribution_data, aes(x = value)) +
-  geom_histogram(bins = 30, fill = "steelblue",
+  geom_histogram(bins = 30, fill = lsabd$teal,
                  color = "white", na.rm = TRUE) +
   facet_wrap(~ variable, scales = "free") +
   labs(
     title = "Distributions of selected continuous variables",
     x = "Observed value",
     y = "Number of participants"
-  ) +
-  theme_minimal()
+  )
 ```
 
 The distributions differ considerably between the selected variables. Total cholesterol and systolic blood pressure show less pronounced right-skewness, whereas CRP, triglycerides and glycohemoglobin have more strongly right-skewed distributions, with several observations substantially higher than the median.
@@ -687,14 +682,13 @@ The distributions differ considerably between the selected variables. Total chol
 
 ```{r}
 ggplot(distribution_data, aes(x = variable, y = value)) +
-  geom_boxplot(fill = "steelblue", na.rm = TRUE) +
+  geom_boxplot(fill = lsabd$teal, na.rm = TRUE) +
   facet_wrap(~ variable, scales = "free") +
   labs(
     title = "Boxplots of selected continuous variables",
     x = NULL,
     y = "Observed value"
-  ) +
-  theme_minimal()
+  )
 ```
 
 ```{r}
@@ -742,15 +736,14 @@ ggplot(nhanes %>%
                 RIDAGEYR >= 20,
                 LBXHSCRP > 0),
        aes(x = LBXHSCRP)) +
-  geom_histogram(bins = 30, fill = "steelblue",
+  geom_histogram(bins = 30, fill = lsabd$teal,
                  color = "white") +
   scale_x_log10() +
   labs(
     title = "Distribution of CRP on a logarithmic scale",
     x = "CRP (mg/L, log10 scale)",
     y = "Number of participants"
-  ) +
-  theme_minimal()
+  )
 ```
 
 The distributions of continuous variables were examined using histograms and boxplots. Potential outliers were identified using the IQR rule.
@@ -798,17 +791,16 @@ cor(
 )
 ```
 
-The Pearson correlation coefficient between both glucose variables is 0.9902, confirming that they contain highly overlapping information.
+The Pearson correlation coefficient between both glucose variables is 0.9902, confirming that they contain highly overlapping information. The correlation is not exactly 1 because `LBDSGLSI` is stored rounded to whole mmol/L (for example 96 mg/dL is stored as 5 mmol/L), which is visible as horizontal bands in the scatter plot below. The mg/dL version therefore contains more information and is the one to keep.
 
 ```{r}
 ggplot(nhanes, aes(x = LBXSGL, y = LBDSGLSI)) +
-  geom_point(alpha = 0.3, na.rm = TRUE) +
+  geom_point(alpha = 0.3, colour = lsabd$teal, na.rm = TRUE) +
   labs(
     title = "Correlation between glucose measurements in different units",
     x = "Glucose (mg/dL)",
     y = "Glucose (mmol/L)"
-  ) +
-  theme_minimal()
+  )
 ```
 
 Some laboratory measurements are represented by multiple variables expressing the same measurement in different units. For example, `LBXSGL` and `LBDSGLSI` represent serum glucose concentrations in different units.
@@ -853,20 +845,13 @@ ggplot(correlation_long,
        aes(x = variable1, y = variable2,
            fill = correlation)) +
   geom_tile() +
-  scale_fill_gradient2(
-    low = "blue",
-    mid = "white",
-    high = "red",
-    midpoint = 0,
-    limits = c(-1, 1)
-  ) +
+  scale_fill_div(limits = c(-1, 1)) +   # diverging house-style scale, centred at 0
   labs(
     title = "Spearman correlation between clinical variables",
     x = NULL,
     y = NULL,
     fill = "Correlation"
   ) +
-  theme_minimal() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
