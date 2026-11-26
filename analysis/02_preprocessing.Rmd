@@ -57,12 +57,128 @@ A total of 11 education responses and nine marital status responses were recoded
 
 Additional special response codes will be evaluated when the corresponding variables are selected for further analyses.
 
-### Handling uninformative variables 
+### Handling uninformative variables
+The exploratory analysis identified one completely missing variable, `BMIHEAD`. Since this variable contains no observed information, it was removed from the working dataset.
+
+Variables with only one unique non-missing value were retained at this stage, as some of them contain information related to measurement quality or study design. Their suitability as analysis features will be evaluated separately.
+
+```{r}
+# Identify completely missing variables
+all_missing_vars <- names(nhanes_clean)[
+  colSums(!is.na(nhanes_clean)) == 0
+]
+
+all_missing_vars
+```
+
+```{r}
+# Remove completely missing variables
+nhanes_clean <- nhanes_clean %>%
+  select(-all_of(all_missing_vars))
+```
+
+```{r}
+# Compare dimensions
+dim(nhanes)
+dim(nhanes_clean)
+```
+
+After removing the completely missing variable, the working dataset contains 11,933 participants and 485 variables. No participants were removed during this preprocessing step.
+
 ### Handling categorical variables 
+Several demographic variables are stored numerically despite representing categorical information. To ensure that these variables are interpreted correctly during subsequent statistical analyses, selected nominal variables were converted into factors, while education level was converted into an ordered factor.
+
+Continuous measurements and quantitative variables were retained in their original numerical format.
+
+```{r}
+nhanes_clean <- nhanes_clean %>%
+  mutate(
+    RIAGENDR = factor(
+      RIAGENDR,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+
+    RIDSTATR = factor(
+      RIDSTATR,
+      levels = c(1, 2),
+      labels = c("Interview only", "Examined")
+    ),
+
+    RIDRETH3 = factor(
+      RIDRETH3,
+      levels = c(1, 2, 3, 4, 6, 7),
+      labels = c(
+        "Mexican American",
+        "Other Hispanic",
+        "Non-Hispanic White",
+        "Non-Hispanic Black",
+        "Non-Hispanic Asian",
+        "Other race"
+      )
+    ),
+
+    DMDEDUC2 = factor(
+      DMDEDUC2,
+      levels = c(1, 2, 3, 4, 5),
+      labels = c(
+        "Less than 9th grade",
+        "9th-11th grade",
+        "High school graduate",
+        "Some college",
+        "College graduate or above"
+      ),
+      ordered = TRUE
+    ),
+
+    DMDMARTZ = factor(DMDMARTZ)
+  )
+```
+
+#### Checking the conversion 
+
+```{r}
+str(nhanes_clean %>%
+      select(RIAGENDR, RIDSTATR, RIDRETH3,
+             DMDEDUC2, DMDMARTZ))
+```
+
+```{r}
+table(nhanes_clean$RIAGENDR, useNA = "ifany")
+table(nhanes_clean$RIDRETH3, useNA = "ifany")
+table(nhanes_clean$DMDEDUC2, useNA = "ifany")
+```
+
 ### Handling missing values
+The exploratory analysis demonstrated that a substantial proportion of missing values is related to the NHANES study design, including examination participation and age-dependent eligibility.
+
+Therefore, no global imputation or complete-case filtering was performed. Applying these methods to the entire dataset could introduce inappropriate values or unnecessarily exclude participants with missing information for variables that are not relevant to a particular analysis.
+
+Instead, missing values will be handled separately for each subsequent analysis, depending on the selected variables, study population and statistical method.
+
 ### Handling outliers and top-coded values
+Potential outliers identified during the exploratory analysis were retained because extreme clinical measurements may reflect genuine biological variation or pathological conditions rather than measurement errors.
+
+Top-coded observations were also retained, as these values represent valid observations with limited numerical precision.
+
+Similarly, laboratory values below the limit of detection were retained as provided by NHANES. The corresponding comment codes will be considered when evaluating the suitability of individual laboratory variables for subsequent analyses.
+
+No general outlier removal or additional substitution of values below the detection limit was performed.
+
 ### Handling redundant variables 
+The exploratory analysis identified several sources of potentially redundant information, including measurements expressed in different units, repeated clinical measurements and strongly correlated biological variables.
+
+These variables were retained in the general working dataset, as their relevance depends on the objectives of subsequent analyses.
+
+When selecting features for individual analyses, duplicate representations of the same measurement will be avoided. Strong correlations between biologically distinct variables will be evaluated in the context of the statistical model rather than used as an automatic exclusion criterion.
+
 ### Transformations and scaling
+Although several continuous variables showed right-skewed distributions, no general logarithmic transformation or standardization was applied to the working dataset.
+
+The need for transformation depends on the distribution of individual variables and the assumptions of the selected statistical method. Furthermore, for machine learning applications, preprocessing parameters such as means and standard deviations should be estimated from the training data only to prevent data leakage.
+
+Transformations and scaling will therefore be performed separately when required by subsequent analyses.
+
 ### Summary of preprocessing decision
 
 ## Quality control after preprocessing
