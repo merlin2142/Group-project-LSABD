@@ -10,6 +10,65 @@ output:
     code_folding: show
 ---
 
+## Data preprocessing
+
+### Creating a working dataset
+Based on the findings of the exploratory analysis, several preprocessing decisions were made to prepare the dataset for subsequent analyses.
+
+A separate working dataset was created to ensure that the original NHANES dataset remains unchanged. General preprocessing steps will be applied to this working dataset, whereas analysis-specific preprocessing will be performed separately in Parts 2, 3 and 4.
+
+```{r}
+nhanes_clean <- nhanes
+```
+
+### Recoding special response codes
+As identified during the exploratory analysis, certain categorical variables contain special response codes representing "Refused" or "Don't know". These codes do not represent valid categories for the characteristics being investigated.
+
+The confirmed special response codes for education level (`DMDEDUC2`) and marital status (`DMDMARTZ`) were therefore recoded as `NA`. Recoding was performed on a variable-specific basis to avoid replacing valid numerical observations.
+
+
+```{r}
+nhanes_clean <- nhanes_clean %>%
+  mutate(
+    DMDEDUC2 = if_else(
+      DMDEDUC2 %in% c(7, 9),
+      NA_real_,
+      DMDEDUC2
+    ),
+    DMDMARTZ = if_else(
+      DMDMARTZ %in% c(77, 99),
+      NA_real_,
+      DMDMARTZ
+    )
+  )
+```
+
+```{r}
+# Education level
+table(nhanes$DMDEDUC2, useNA = "ifany")
+table(nhanes_clean$DMDEDUC2, useNA = "ifany")
+
+# Marital status
+table(nhanes$DMDMARTZ, useNA = "ifany")
+table(nhanes_clean$DMDMARTZ, useNA = "ifany")
+```
+
+A total of 11 education responses and nine marital status responses were recoded as missing values. The remaining valid categories were retained. This ensures that these special response codes are not incorrectly treated as meaningful categories during subsequent analyses.
+
+Additional special response codes will be evaluated when the corresponding variables are selected for further analyses.
+
+### Handling uninformative variables 
+### Handling categorical variables 
+### Handling missing values
+### Handling outliers and top-coded values
+### Handling redundant variables 
+### Transformations and scaling
+### Summary of preprocessing decision
+
+## Quality control after preprocessing
+
+## Summary and suitability for further analyssis
+
 <!--
 PURPOSE  Turn the raw NHANES file into ONE clean dataset that Parts 2, 3 and 4
          all use. Every step is justified by a finding in 01_exploration.
