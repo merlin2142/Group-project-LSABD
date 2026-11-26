@@ -12,12 +12,26 @@ output:
 
 ## Data preprocessing
 
+```{r setup, include = FALSE}
+source(here::here("R", "utils.R"))
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 9, fig.height = 5, dpi = 150,
+                      dev = c("png", "cairo_pdf"),
+                      fig.path = file.path(paths$figures, "02_preprocessing", ""))
+```
+
+```{r load}
+nhanes_raw <- load_raw_data()
+codebook   <- load_codebook()
+```
+
 ### Creating a working dataset
 Based on the findings of the exploratory analysis, several preprocessing decisions were made to prepare the dataset for subsequent analyses.
 
 A separate working dataset was created to ensure that the original NHANES dataset remains unchanged. General preprocessing steps will be applied to this working dataset, whereas analysis-specific preprocessing will be performed separately in Parts 2, 3 and 4.
 
 ```{r}
+nhanes <- nhanes_raw
 nhanes_clean <- nhanes
 ```
 
@@ -131,7 +145,15 @@ nhanes_clean <- nhanes_clean %>%
       ordered = TRUE
     ),
 
-    DMDMARTZ = factor(DMDMARTZ)
+    DMDMARTZ = factor(
+      DMDMARTZ,
+      levels = c(1, 2, 3),
+      labels = c(
+        "Married or living with partner",
+        "Widowed, divorced or separated",
+        "Never married"
+        )
+)
   )
 ```
 
@@ -145,9 +167,32 @@ str(nhanes_clean %>%
 
 ```{r}
 table(nhanes_clean$RIAGENDR, useNA = "ifany")
+table(nhanes_clean$RIDSTATR, useNA = "ifany")
 table(nhanes_clean$RIDRETH3, useNA = "ifany")
 table(nhanes_clean$DMDEDUC2, useNA = "ifany")
+table(nhanes_clean$DMDMARTZ, useNA = "ifany")
 ```
+
+```{r}
+categorical_vars <- c(
+  "RIAGENDR", "RIDSTATR", "RIDRETH3",
+  "DMDEDUC2", "DMDMARTZ"
+)
+
+data.frame(
+  variable = categorical_vars,
+  missing_before = colSums(
+    is.na(nhanes[categorical_vars])
+  ),
+  missing_after = colSums(
+    is.na(nhanes_clean[categorical_vars])
+  )
+)
+```
+
+The selected demographic variables were successfully converted into factors, with education level represented as an ordered factor. The number of missing values remained unchanged, except for the previously recoded special response codes in education level and marital status.
+
+This indicates that the conversion did not introduce additional missing values.
 
 ### Handling missing values
 The exploratory analysis demonstrated that a substantial proportion of missing values is related to the NHANES study design, including examination participation and age-dependent eligibility.
@@ -180,6 +225,23 @@ The need for transformation depends on the distribution of individual variables 
 Transformations and scaling will therefore be performed separately when required by subsequent analyses.
 
 ### Summary of preprocessing decision
+### Summary of preprocessing decisions
+
+| Data quality issue | Preprocessing decision |
+|---|---|
+| Original dataset | Retained unchanged |
+| Special response codes | Confirmed invalid codes in selected variables recoded as NA |
+| Completely missing variables | Removed |
+| Constant variables | Retained |
+| Categorical variables | Selected variables converted into factors |
+| Missing values | No global imputation or participant exclusion |
+| Potential outliers | Retained |
+| Top-coded values | Retained |
+| Values below the LOD | Retained as provided by NHANES |
+| Redundant variables | Retained |
+| Transformations and scaling | Deferred to subsequent analyses |
+
+General preprocessing addressed confirmed data quality issues while preserving the available biological and clinical information. No research question-specific participant or feature selection was performed. Further preprocessing will depend on the objectives and statistical requirements of subsequent analyses.
 
 ## Quality control after preprocessing
 
