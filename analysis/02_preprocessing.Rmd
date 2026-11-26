@@ -225,7 +225,6 @@ The need for transformation depends on the distribution of individual variables 
 Transformations and scaling will therefore be performed separately when required by subsequent analyses.
 
 ### Summary of preprocessing decision
-### Summary of preprocessing decisions
 
 | Data quality issue | Preprocessing decision |
 |---|---|
