@@ -139,6 +139,49 @@ BMXBMI is a continuous quantitative variable representing body mass index. Final
 
 These examples demonstrate that variable types should be determined based on their meaning and documentation rather than their storage type alone. This distinction is important for selecting appropriate preprocessing methods, visualizations and statistical analyses.
 
+#### Classification of all variables
+The examples above were extended to all 486 variables. Rules were based on the variable name, the codebook label and
+the number of distinct values. Ordinal and discrete variables were assigned manually based on the NHANES documentation.
+
+```{r variable-types}
+ordinal_vars  <- c("DMDEDUC2", "DMDHREDZ", "DMDHSEDZ", "DMDHRAGZ", "ALQ121", "ALQ142", "ALQ270", "ALQ280",
+                   "BPAOCSZ", "BMDBMIC", "WHQ030E", "DBQ390", "DBQ421", "DBQ424", "RIDEXMON", "DMDYRUSR")
+discrete_vars <- c("RIDAGEYR", "RIDAGEMN", "RIDEXAGM", "DMDHHSIZ", "ALQ130", "ALQ170", "DBD381", "DBD411",
+                   "ECD070A", "ECD070B", "DBD030", "DBD041", "DBD050", "DBD055", "DBD061")
+
+variable_types <- codebook %>%
+  filter(variable %in% names(nhanes)) %>%
+  mutate(
+    n_unique = sapply(nhanes[variable], function(x) length(unique(na.omit(x)))),
+    type = case_when(
+      variable == "SEQN" ~ "identifier",
+      grepl("^WT", variable) | variable %in% c("SDMVSTRA", "SDMVPSU", "SDDSRVYR") ~ "survey design / weight",
+      grepl("comment|comt|cmt", label, ignore.case = TRUE) ~ "comment code",
+      variable %in% ordinal_vars ~ "ordinal",
+      variable %in% discrete_vars ~ "discrete",
+      !sapply(nhanes[variable], is.numeric) | n_unique <= 12 ~ "nominal",
+      TRUE ~ "continuous"
+    )
+  )
+
+table(variable_types$type)
+table(variable_types$type, variable_types$component)
+
+ggplot(variable_types, aes(x = component, fill = type)) +
+  geom_bar() +
+  labs(
+    title = "Variable types per NHANES component",
+    x = "NHANES component",
+    y = "Number of variables",
+    fill = "Variable type"
+  ) +
+  theme_minimal()
+```
+
+Most laboratory variables are continuous measurements, but a large group consists of comment codes that describe
+measurement quality (limit of detection). Demographic and questionnaire variables are mainly nominal or ordinal codes.
+This classification is used later to choose the appropriate preprocessing per variable type.
+
 ### Data integrity 
 
 #### Checking participant identifiers 
