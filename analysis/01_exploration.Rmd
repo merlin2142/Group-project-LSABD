@@ -1,774 +1,867 @@
 ---
-title: "LSABD group project – Part 1a: exploration of the raw NHANES 2021–2023 data"
-author: "Group XX"
-date: "`r Sys.Date()`"
-output:
+title: "group_project"
+output: 
   html_document:
-    toc: true
-    toc_float: true
-    number_sections: true
-    code_folding: show
+    toc: TRUE
+    toc_float: TRUE
+    number_sections: TRUE
+date: "2026-11-22"
 ---
 
-<!--
-PURPOSE
-  Explore the raw, merged NHANES 2021-2023 file BEFORE any cleaning, so that
-  every preprocessing decision in 02_preprocessing.Rmd can be justified with
-  evidence from this report. Nothing is removed or changed in the data here:
-  this script only looks, counts and plots.
+# PART 1: EXPLORE, PREPROCESS AND QUALITY-CONTROL THE DATA
 
-INPUT   data/raw/NHANES_20212023_merged_filtered_1.csv     (11 933 participants x 486 variables)
-        data/raw/NHANES_20212023_codebook_filtered_1.csv   (one row per variable)
-OUTPUT  this HTML report + every figure as PNG and PDF in results/figures/01_exploration/
-OWNER   Person 1
--->
+## Setup 
+### loading packages
 
-```{r setup, include = FALSE}
-source(here::here("R", "utils.R"))   # paths, palette, theme, load_*() helpers
+```{r}
+library(tidyverse)
+```
 
-knitr::opts_chunk$set(
-  echo = TRUE, message = FALSE, warning = FALSE,
-  fig.width = 9, fig.height = 5, dpi = 150,
-  dev = c("png", "cairo_pdf"),       # PNG for the HTML, vector PDF for the report
-  fig.path = file.path(paths$figures, "01_exploration", "")
+### Importing the datasets
+The provided NHANES dataset and its corresponding codebook were imported using read_csv(). The original dataset is retained throughout the project to allow comparisons before and after preprocessing.
+
+```{r}
+nhanes <- read_csv("NHANES_20212023_merged_filtered 1.csv",
+                   guess_max = 20000)
+codebook <- read_csv("NHANES_20212023_codebook_filtered 1.csv")
+```
+
+## Dataset description 
+The National Health and Nutrition Examination Survey (NHANES) is a US health survey conducted by the National Center for Health Statistics (NCHS). It collects health-related information through interviews and physical examinations, including laboratory measurements.
+
+This project uses a provided dataset based on the NHANES August 2021–August 2023 cycle. The dataset combines information from four NHANES components: Demographics, Examination, Laboratory and Questionnaire. Each row represents an individual participant, identified by a unique respondent sequence number (`SEQN`), while each column represents a variable.
+
+A corresponding codebook is provided, containing the variable names, descriptions, original data files and NHANES components. This codebook, together with the official NHANES documentation, will be used to interpret the variables and guide preprocessing decisions.
+
+Source: [CDC/NCHS, NHANES August 2021–August 2023 Data Documentation](https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx?Cycle=2021-2023).
+
+## Initial data exploration 
+
+### Dimensions of the dataset
+To determine the size of the dataset, the number of rows and columns was examined using `dim()`.
+
+```{r}
+dim(nhanes)
+```
+
+The dataset contains 11,933 rows, representing individual participants, and 486 columns, representing variables. These variables include participant identifiers, demographic information, examination results, laboratory measurements and questionnaire responses.
+
+### Inspecting the dataset
+To obtain an initial overview of the dataset, the first six observations and ten variables were inspected using `head()`. The structure and storage types of these variables were examined using `str()`.
+
+```{r}
+head(nhanes[, 1:10])
+str(nhanes[, 1:10])
+```
+
+The initial inspection shows that variables are stored numerically and that missing values (NA) are present. However, the storage type alone does not indicate whether a variable should be treated as quantitative or categorical. Therefore, the meaning of the variables must also be considered.
+
+### Exploring the codebook
+To understand the meaning and origin of the variables, the provided NHANES codebook was inspected.
+
+```{r}
+head(codebook, 10)
+table(codebook$component)
+```
+
+The codebook contains four columns: variable name, variable description, original data file and NHANES component.
+
+The number of variables belonging to each NHANES component was calculated to obtain an overview of the different types of information available in the dataset. We can visualize this.
+
+```{r}
+ggplot(codebook, aes(x = component)) +
+  geom_bar(fill = "steelblue") +
+  labs(
+    title = "Distribution of variables across NHANES components",
+    x = "NHANES component",
+    y = "Number of variables"
+  ) +
+  theme_minimal()
+```
+
+The dataset contains variables from four NHANES components: Demographics (27), Examination (32), Laboratory (387) and Questionnaire (40). Most variables belong to the Laboratory component (79.6%), indicating that laboratory-related measurements make up the largest part of the dataset in terms of variable count.
+
+### Identifying variable types
+#### Storage types
+
+```{r}
+table(sapply(nhanes, class))
+```
+
+The dataset contains 484 variables stored as numeric, one as character and one as logical. However, numerical storage does not necessarily imply that a variable is quantitative, as categorical variables may also be represented by numerical codes.The character and logical variables require further inspection to determine whether their storage types are appropriate.
+
+```{r}
+names(nhanes)[sapply(nhanes, is.character)]
+names(nhanes)[sapply(nhanes, is.logical)]
+```
+
+```{r}
+codebook %>%
+  filter(variable %in% c("BPAOARM", "BMIHEAD"))
+```
+
+```{r}
+table(nhanes$BPAOARM, useNA = "ifany")
+table(nhanes$BMIHEAD, useNA = "ifany")
+```
+
+Further inspection identified BPAOARM as a character variable representing the arm selected for oscillometric blood pressure measurement. The observed values were L (51 participants), R (7,603 participants) and NA (4,279 participants). This variable represents categorical information.
+
+BMIHEAD, a head circumference comment variable, was imported as logical because all 11,933 observations are missing. This variable contains no observed information and will be reconsidered during preprocessing.
+
+#### Actual variable types 
+To distinguish storage types from actual variable types, several variables were selected based on their descriptions in the codebook.
+
+```{r}
+codebook %>%
+  filter(variable %in% c(
+    "RIAGENDR", "RIDSTATR", "DMDEDUC2",
+    "RIDAGEYR", "BMXBMI", "SEQN"
+  ))
+```
+
+```{r}
+# Categorical variables
+table(nhanes$RIAGENDR, useNA = "ifany")
+table(nhanes$RIDSTATR, useNA = "ifany")
+table(nhanes$DMDEDUC2, useNA = "ifany")
+
+# Quantitative variables
+summary(nhanes$RIDAGEYR)
+summary(nhanes$BMXBMI)
+```
+
+RIAGENDR and RIDSTATR are nominal categorical variables, as their numerical codes represent categories without a natural order. In contrast, DMDEDUC2 represents education level, which has a natural order among its substantive categories. It is therefore considered an ordinal variable. Special response codes, such as refused or don't know, need to be considered separately.
+
+RIDAGEYR is a quantitative variable recorded in completed years and can therefore be considered discrete in the provided dataset. The observed values range from 0 to 80, with a median of 37 and a mean of 38.32 years. According to the NHANES documentation, participants aged 80 years or older are coded as 80.
+
+BMXBMI is a continuous quantitative variable representing body mass index. Finally, SEQN is a participant identifier rather than a biological or clinical measurement.
+
+These examples demonstrate that variable types should be determined based on their meaning and documentation rather than their storage type alone. This distinction is important for selecting appropriate preprocessing methods, visualizations and statistical analyses.
+
+### Data integrity 
+
+#### Checking participant identifiers 
+To assess whether each participant is uniquely represented in the dataset, the total number of observations was compared with the number of unique participant identifiers (SEQN). Missing and duplicated identifiers were also checked.
+
+```{r}
+# Total number of participants
+nrow(nhanes)
+
+# Number of unique participant identifiers
+length(unique(nhanes$SEQN))
+
+# Number of missing participant identifiers
+sum(is.na(nhanes$SEQN))
+
+# Number of duplicated participant identifiers
+sum(duplicated(nhanes$SEQN))
+```
+
+The dataset contains 11,933 observations and 11,933 unique participant identifiers. No missing or duplicated identifiers were detected, indicating that each participant is represented only once in the dataset.
+
+#### Checking for duplicate rows
+
+```{r}
+sum(duplicated(nhanes))
+```
+
+No completely duplicated rows were detected. Therefore, no observations need to be removed due to duplication.
+
+#### Checking consistency with the codebook 
+
+```{r}
+setequal(names(nhanes), codebook$variable)
+```
+
+The variable names in the dataset were compared with those in the codebook using `setequal()`. The result was `TRUE`, confirming that all 486 variables in the dataset are represented in the codebook and vice versa.
+
+## Missing data
+
+### Overall missingness 
+As missing values were observed during the initial data exploration, the extent and distribution of missing data were investigated. First, the total number and percentage of missing values in the original dataset were calculated.
+
+```{r}
+# Total number of missing values
+sum(is.na(nhanes))
+
+# Overall percentage of missing values
+mean(is.na(nhanes)) * 100
+```
+
+The dataset contains 3,102,238 missing values, corresponding to 53.49% of all values. This indicates that a substantial proportion of the dataset is missing. However, the overall percentage does not provide information about how missing values are distributed across variables and participants. Therefore, missingness was investigated in more detail.
+
+### Missingness per variable
+#### Calculating missingness per variable
+To identify variables with a high proportion of missing values, the number and percentage of missing values were calculated for each variable. This allows us to identify variables that may require particular attention during preprocessing.
+
+```{r}
+missing_variables <- tibble(
+  variable = names(nhanes),
+  n_missing = colSums(is.na(nhanes)),
+  missing_percentage = colMeans(is.na(nhanes)) * 100
+)
+
+summary(missing_variables$missing_percentage)
+```
+
+#### Distribution of missingness across variables
+
+```{r}
+missing_variables <- missing_variables %>%
+  mutate(missing_group = cut(
+    missing_percentage,
+    breaks = c(-0.1, 0, 10, 25, 50, 75, 90, 100),
+    labels = c("0%", "0-10%", "10-25%", "25-50%",
+               "50-75%", "75-90%", "90-100%")
+  ))
+
+ggplot(missing_variables, aes(x = missing_group)) +
+  geom_bar(fill = "steelblue") +
+  labs(
+    title = "Distribution of missingness across variables",
+    x = "Percentage of missing values",
+    y = "Number of variables"
+  ) +
+  theme_minimal()
+```
+
+The proportion of missing values varies considerably between variables. Only 12 variables contain no missing values, while the majority of variables (281 out of 486) contain between 25% and 50% missing values. Furthermore, 191 variables contain more than 50% missing values, including 35 variables with more than 90% missing values.
+
+These findings indicate that missingness is not equally distributed across variables. Further investigation is needed before deciding whether variables with high missingness should be excluded.
+
+#### Variables with high missingness
+
+```{r}
+high_missing <- missing_variables %>%
+  filter(missing_percentage > 90) %>%
+  left_join(codebook, by = "variable") %>%
+  select(variable, label, component, missing_percentage) %>%
+  arrange(desc(missing_percentage))
+
+high_missing
+```
+
+Variables with more than 90% missing values were matched with their descriptions in the codebook to better understand their meaning. These include comment codes, questionnaire variables and specific laboratory measurements.
+
+One variable, `BMIHEAD`, is completely missing and therefore contains no information. However, other variables with high missingness may still contain relevant information for specific subgroups of participants. Consequently, a high percentage of missing values alone is not considered sufficient justification for removing a variable.
+
+### Missingness per participant
+In addition to missingness per variable, missingness per participant was investigated to determine whether certain participants have substantially less available information than others.
+
+```{r}
+missing_participants <- tibble(
+  SEQN = nhanes$SEQN,
+  missing_percentage = rowMeans(is.na(nhanes)) * 100
+)
+
+summary(missing_participants$missing_percentage)
+```
+
+```{r}
+ggplot(missing_participants, aes(x = missing_percentage)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  labs(
+    title = "Distribution of missingness across participants",
+    x = "Percentage of missing values",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+Missingness varies considerably between participants, ranging from 10.91% to 97.53%. The median percentage of missing values is 38.27%, whereas the mean is higher (53.49%). In addition, the third quartile is 93.21%, indicating that a substantial group of participants has very limited available information.
+
+This suggests that missingness may be related to participant characteristics or the study design rather than being equally distributed across participants.
+
+### Missingness by NHANES component
+Since the dataset combines information from different NHANES components, missingness was compared across these components to investigate whether certain types of data are more affected than others.
+
+```{r}
+missing_components <- missing_variables %>%
+  left_join(codebook, by = "variable") %>%
+  group_by(component) %>%
+  summarise(
+    n_variables = n(),
+    mean_missing = mean(missing_percentage)
+  )
+
+missing_components
+```
+
+```{r}
+ggplot(missing_components,
+       aes(x = component, y = mean_missing)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    title = "Mean missingness by NHANES component",
+    x = "NHANES component",
+    y = "Mean percentage of missing values"
+  ) +
+  theme_minimal()
+```
+
+The Questionnaire component has the highest average percentage of missing values (76.29%), followed by Examination (57.63%) and Laboratory (52.37%). The Demographics component has the lowest average missingness (30.97%).
+
+These differences may be explained by the way NHANES data are collected. Some measurements require participants to attend a physical examination, while certain questionnaires and laboratory measurements are only applicable to specific subgroups of participants.
+
+### Missingness by examination status
+One possible explanation for the high proportion of missing values is the NHANES study design. Not all participants who completed the interview also participated in the physical examination. To investigate the impact of examination participation on missingness, participants were grouped according to their interview and examination status (`RIDSTATR`).
+
+```{r}
+table(nhanes$RIDSTATR)
+```
+
+```{r}
+missing_participants <- missing_participants %>%
+  mutate(
+    examination_status = factor(
+      nhanes$RIDSTATR,
+      levels = c(1, 2),
+      labels = c("Interview only", "Interview and examination")
+    )
+  )
+```
+
+```{r}
+missing_participants %>%
+  group_by(examination_status) %>%
+  summarise(
+    n_participants = n(),
+    mean_missing = mean(missing_percentage),
+    median_missing = median(missing_percentage)
+  )
+```
+
+```{r}
+ggplot(missing_participants,
+       aes(x = examination_status, y = missing_percentage)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(
+    title = "Missingness by examination status",
+    x = "Examination status",
+    y = "Percentage of missing values"
+  ) +
+  theme_minimal()
+```
+
+Of the 11,933 participants, 3,073 only completed the interview, whereas 8,860 participated in both the interview and the physical examination.
+
+Participants who only completed the interview have substantially more missing values, with an average missingness of 94.85%, compared to 39.15% among examined participants.
+
+This indicates that a large proportion of missingness is related to the NHANES study design. Participants who did not attend the physical examination lack examination and laboratory measurements. These values are therefore missing for a systematic reason rather than simply being randomly distributed throughout the dataset.
+
+### Missingness by age
+Although missingness is substantially lower among examined participants, a considerable proportion of values is still missing. Another possible explanation is that certain NHANES measurements and questionnaires are only applicable to participants within specific age ranges.
+
+To investigate this, missingness was compared across age groups among participants who completed the physical examination.
+
+```{r}
+missing_participants <- missing_participants %>%
+  mutate(age = nhanes$RIDAGEYR)
+
+missing_examined <- missing_participants %>%
+  filter(examination_status == "Interview and examination") %>%
+  mutate(
+    age_group = cut(
+      age,
+      breaks = c(-1, 5, 12, 17, 39, 59, 80),
+      labels = c("0-5", "6-12", "13-17",
+                 "18-39", "40-59", "60+")
+    )
+  )
+```
+
+```{r}
+missing_examined %>%
+  group_by(age_group) %>%
+  summarise(
+    n_participants = n(),
+    mean_missing = mean(missing_percentage),
+    median_missing = median(missing_percentage)
+  )
+```
+
+```{r}
+ggplot(missing_examined,
+       aes(x = age_group, y = missing_percentage)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(
+    title = "Missingness by age group among examined participants",
+    x = "Age group (years)",
+    y = "Percentage of missing values"
+  ) +
+  theme_minimal()
+```
+
+Among examined participants, missingness is highest in the youngest age groups. Participants aged 0–5 years have an average missingness of 80.68%, followed by participants aged 6–12 years (57.79%). In contrast, the average missingness among adult age groups is approximately 31–32%.
+
+These findings suggest that missingness is also related to participant age. Certain laboratory measurements, physical examinations and questionnaires may not be applicable to younger participants. Therefore, missing values in these age groups do not necessarily indicate poor data quality.
+
+```{r}
+nhanes %>%
+  mutate(age_group = if_else(
+    RIDAGEYR < 20, "Under 20", "20 and older"
+  )) %>%
+  group_by(age_group) %>%
+  summarise(
+    n_participants = n(),
+    missing_education = sum(is.na(DMDEDUC2)),
+    missing_percentage = mean(is.na(DMDEDUC2)) * 100
+  )
+```
+
+Education level (`DMDEDUC2`) provides a clear example of age-dependent missingness. According to the codebook, this variable is intended for adults aged 20 years and older.
+
+All participants younger than 20 years have missing values for this variable, whereas only 0.19% of participants aged 20 years or older have values recorded as NA. This demonstrates that some missing values arise because a variable is not applicable to a particular group of participants, rather than because information was unsuccessfully collected.
+
+### Interpretation and implications for preprocessing
+
+The missing data analysis revealed that missingness is not equally distributed across variables or participants. A substantial proportion of missing values can be explained by the NHANES study design, particularly examination participation and age-dependent eligibility.
+
+Several implications for preprocessing can be identified:
+
+- Completely missing variables contain no information and can be removed.
+- Variables with high missingness should be evaluated individually, taking their meaning and eligibility criteria into account.
+- Analyses involving examination and laboratory measurements should focus on examined participants.
+- Age-related eligibility should be considered when selecting participants and variables for further analyses.
+- Missing values should not automatically be imputed, as some measurements are missing because they are not applicable to certain participants.
+
+The original dataset will be retained, while appropriate subsets will be created depending on the requirements of the subsequent analyses.
+
+## Data quality assessment
+
+### Special response codes
+In addition to missing values represented by NA, NHANES uses specific numerical codes to indicate responses such as "Refused" and "Don't know". These values are not detected by is.na() and may incorrectly be treated as valid observations during statistical analyses.
+
+To illustrate this issue, selected categorical variables were investigated using their frequency distributions and the official NHANES documentation.
+
+```{r}
+table(nhanes$DMDEDUC2, useNA = "ifany")
+```
+
+```{r}
+sum(nhanes$DMDEDUC2 == 7, na.rm = TRUE)
+sum(nhanes$DMDEDUC2 == 9, na.rm = TRUE)
+```
+
+For education level (`DMDEDUC2`), codes 1 to 5 represent valid education categories, whereas codes 7 and 9 represent "Refused" and "Don't know", respectively. These special response codes do not provide information about the participant's education level.
+
+Such codes should therefore be treated as missing values during preprocessing. However, the meaning of numerical codes differs between variables, so recoding should always be based on the official variable-specific documentation.
+
+In the provided dataset, no participants have a recorded value of 7, whereas 11 participants have a recorded value of 9. These 11 observations represent additional missing information that was not detected during the initial missing data analysis.
+
+#### Screening for potential special response codes
+
+```{r}
+# Select demographic and questionnaire variables
+response_vars <- codebook %>%
+  filter(component %in% c("Demographics", "Questionnaire")) %>%
+  pull(variable)
+
+# Potential special response codes
+special_codes <- c(7, 9, 77, 99, 777, 999,
+                   7777, 9999, 77777, 99999)
+
+# Count potential special response codes per variable
+special_code_summary <- tibble(
+  variable = response_vars,
+  n_potential_codes = sapply(
+    nhanes[response_vars],
+    function(x) sum(x %in% special_codes)
+  )
+)
+
+special_code_summary %>%
+  filter(n_potential_codes > 0) %>%
+  left_join(codebook, by = "variable") %>%
+  select(variable, label, n_potential_codes) %>%
+  arrange(desc(n_potential_codes))
+```
+
+A preliminary screening was performed to identify variables containing numerical values commonly used as special response codes. However, these values may also represent valid observations. Therefore, this screening cannot be used as an automatic recoding rule. The official NHANES documentation must be consulted before modifying individual variables.
+
+### Top-coded values
+Some NHANES variables are top-coded to protect participant confidentiality. This means that values above a predefined threshold are represented by the same maximum value.
+
+Two examples are age (RIDAGEYR), which is top-coded at 80 years, and the family income-to-poverty ratio (INDFMPIR), which is top-coded at 5. The distributions of these variables were investigated to assess the presence of top-coded observations.
+
+```{r}
+ggplot(nhanes, aes(x = RIDAGEYR)) +
+  geom_histogram(binwidth = 1, fill = "steelblue",
+                 color = "white", boundary = 0.5) +
+  labs(
+    title = "Distribution of participant age",
+    x = "Age (years)",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(nhanes, aes(x = INDFMPIR)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue",
+                 color = "white", na.rm = TRUE,
+                 boundary = 0.05) +
+  labs(
+    title = "Distribution of family income-to-poverty ratio",
+    x = "Income-to-poverty ratio",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Number of observations at the top-coded values
+sum(nhanes$RIDAGEYR == 80, na.rm = TRUE)
+sum(nhanes$INDFMPIR == 5, na.rm = TRUE)
+```
+
+Both variables contain a substantial number of observations at their maximum recorded value. A total of 525 participants have a recorded age of 80 years, while 2,149 participants have an income-to-poverty ratio of 5.
+
+These observations are not necessarily outliers or measurement errors, but represent top-coded values. The exact values above these thresholds are unknown. Therefore, these observations should not be removed solely because they occur at the maximum recorded value. Top-coding should instead be considered when interpreting subsequent analyses.
+
+### Limits of detection 
+Laboratory measurements are subject to analytical detection limits. For many NHANES laboratory tests, an additional comment code indicates whether the measured concentration was below the limit of detection (LOD).
+
+When a concentration is below the LOD, NHANES commonly reports a substitute value equal to the LOD divided by the square root of two. Although these values are not recorded as missing, they do not represent exact measured concentrations.
+
+The laboratory comment codes were therefore investigated to identify measurements for which a substantial proportion of observations are below the detection limit.
+
+#### Identifying laboratory comment codes
+
+```{r}
+lod_variables <- codebook %>%
+  filter(
+    component == "Laboratory",
+    grepl("comment|comt|cmt", label, ignore.case = TRUE)
+  )
+
+head(lod_variables, 10)
+nrow(lod_variables)
+```
+
+```{r}
+unique(unlist(nhanes[lod_variables$variable]))
+```
+
+#### Percentage of observations below the LOD
+
+```{r}
+lod_summary <- tibble(
+  variable = lod_variables$variable,
+  n_available = colSums(
+    !is.na(nhanes[lod_variables$variable])
+  ),
+  percentage_below_lod = colMeans(
+    nhanes[lod_variables$variable] == 1,
+    na.rm = TRUE
+  ) * 100
+)
+
+lod_summary <- lod_summary %>%
+  left_join(codebook, by = "variable") %>%
+  arrange(desc(percentage_below_lod))
+
+head(lod_summary, 10)
+```
+
+```{r}
+# Number of comment variables
+nrow(lod_summary)
+
+# Number with more than 50% below the LOD
+sum(lod_summary$percentage_below_lod > 50,
+    na.rm = TRUE)
+```
+
+#### Visualization 
+
+```{r}
+lod_summary %>%
+  filter(n_available > 0) %>%
+  slice_max(percentage_below_lod, n = 15,
+            with_ties = FALSE) %>%
+  ggplot(aes(
+    x = reorder(variable, percentage_below_lod),
+    y = percentage_below_lod
+  )) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Laboratory variables with the highest proportion below LOD",
+    x = "Laboratory comment variable",
+    y = "Percentage below LOD"
+  ) +
+  theme_minimal()
+```
+
+#### Interpretation 
+A total of 114 laboratory comment variables were identified. For 46 of these variables, more than half of the available observations were below the limit of detection.
+
+A high proportion of values below the LOD may reduce the ability of a variable to distinguish between participants, as multiple observations are represented by the same substitute value. Such variables may therefore be less suitable for certain quantitative analyses.
+
+However, these observations are not necessarily measurement errors and should not automatically be removed. The proportion of values below the LOD will be considered when selecting laboratory variables for further analyses.
+
+### Distributions and outliers
+The distributions of selected continuous variables were investigated to identify skewness, extreme values and potential measurement errors. Understanding these distributions is important when selecting appropriate statistical methods and deciding whether transformations are necessary.
+
+Six continuous variables representing different clinical and laboratory measurements were selected for this exploratory analysis.
+
+#### Distribution of continuous variables
+
+```{r}
+selected_vars <- c(
+  "BMXBMI", "BPXOSY1", "LBXTC",
+  "LBXHSCRP", "LBXSTR", "LBXGH"
+)
+
+distribution_data <- nhanes %>%
+  filter(RIDSTATR == 2, RIDAGEYR >= 20) %>%
+  select(all_of(selected_vars)) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+```
+
+```{r}
+ggplot(distribution_data, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "steelblue",
+                 color = "white", na.rm = TRUE) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(
+    title = "Distributions of selected continuous variables",
+    x = "Observed value",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+The distributions differ considerably between the selected variables. Total cholesterol and systolic blood pressure show less pronounced right-skewness, whereas CRP, triglycerides and glycohemoglobin have more strongly right-skewed distributions, with several observations substantially higher than the median.
+
+#### Identification of outliers
+
+```{r}
+ggplot(distribution_data, aes(x = variable, y = value)) +
+  geom_boxplot(fill = "steelblue", na.rm = TRUE) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(
+    title = "Boxplots of selected continuous variables",
+    x = NULL,
+    y = "Observed value"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+outlier_summary <- distribution_data %>%
+  filter(!is.na(value)) %>%
+  group_by(variable) %>%
+  summarise(
+    Q1 = quantile(value, 0.25),
+    Q3 = quantile(value, 0.75),
+    IQR = Q3 - Q1,
+    lower_limit = Q1 - 1.5 * IQR,
+    upper_limit = Q3 + 1.5 * IQR,
+    n_outliers = sum(
+      value < lower_limit | value > upper_limit
+    ),
+    percentage_outliers = n_outliers / n() * 100
+  )
+
+outlier_summary
+```
+
+The proportion of potential outliers varies between the selected variables. Glycohemoglobin (8.58%), CRP (8.35%) and triglycerides (5.94%) contain the highest proportions of observations outside the IQR-based limits. In contrast, total cholesterol contains only 1.40% potential outliers.
+
+These findings are consistent with the observed differences in the distributions of these variables.
+
+#### Investigating extreme values
+
+```{r}
+distribution_data %>%
+  group_by(variable) %>%
+  summarise(
+    minimum = min(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    maximum = max(value, na.rm = TRUE)
+  )
+```
+
+Several variables contain extreme maximum values, such as a CRP concentration of 150.92 mg/L, a triglyceride concentration of 1,724 mg/dL and a glycohemoglobin level of 17.1%. Although these values are unusually high, they may reflect underlying pathological conditions rather than measurement errors. Therefore, extreme observations should not automatically be excluded based on their numerical values alone.
+
+#### Exploring potential log transformation 
+
+```{r}
+ggplot(nhanes %>%
+         filter(RIDSTATR == 2,
+                RIDAGEYR >= 20,
+                LBXHSCRP > 0),
+       aes(x = LBXHSCRP)) +
+  geom_histogram(bins = 30, fill = "steelblue",
+                 color = "white") +
+  scale_x_log10() +
+  labs(
+    title = "Distribution of CRP on a logarithmic scale",
+    x = "CRP (mg/L, log10 scale)",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+The distributions of continuous variables were examined using histograms and boxplots. Potential outliers were identified using the IQR rule.
+
+However, observations classified as outliers are not necessarily incorrect. In clinical data, extreme values may reflect genuine biological variation or underlying disease. Moreover, right-skewed distributions can result in a relatively large number of observations being classified as outliers.
+
+A logarithmic scale was explored as a potential approach for dealing with right-skewed variables. The need for transformation will depend on the characteristics of the variable and the requirements of the subsequent statistical analysis. No observations were removed or transformed at this stage.
+
+### Redundant and uninformative variables
+Variables without variation provide no information for distinguishing between participants. Therefore, the number of unique non-missing values was calculated for each variable to identify completely missing and constant variables.
+
+#### Variables without variation
+
+```{r}
+variable_variation <- tibble(
+  variable = names(nhanes),
+  n_unique = sapply(
+    nhanes,
+    function(x) length(unique(na.omit(x)))
+  )
+)
+
+variable_variation %>%
+  filter(n_unique <= 1) %>%
+  left_join(codebook, by = "variable") %>%
+  select(variable, label, component, n_unique)
+```
+
+```{r}
+sum(variable_variation$n_unique == 0)
+sum(variable_variation$n_unique == 1)
+```
+
+One completely missing variable and 50 variables with only one unique non-missing value were identified. These variables contain no variation among their observed values and are therefore generally unsuitable as ordinary quantitative or categorical analysis features.
+
+However, some of these variables serve other purposes, such as describing measurement quality or the study design. Their role and missingness patterns should therefore be considered before excluding them from further analyses.
+
+#### Duplicate measurements in different units 
+
+```{r}
+cor(
+  nhanes$LBXSGL,
+  nhanes$LBDSGLSI,
+  use = "complete.obs"
 )
 ```
 
-```{r libraries}
-library(patchwork)   # combine ggplots into one figure
-library(scales)      # axis label helpers
-set.seed(2026)       # only used for the random subset in the missingness matrix
+The Pearson correlation coefficient between both glucose variables is 0.9902, confirming that they contain highly overlapping information.
+
+```{r}
+ggplot(nhanes, aes(x = LBXSGL, y = LBDSGLSI)) +
+  geom_point(alpha = 0.3, na.rm = TRUE) +
+  labs(
+    title = "Correlation between glucose measurements in different units",
+    x = "Glucose (mg/dL)",
+    y = "Glucose (mmol/L)"
+  ) +
+  theme_minimal()
 ```
 
-# Loading the data
+Some laboratory measurements are represented by multiple variables expressing the same measurement in different units. For example, `LBXSGL` and `LBDSGLSI` represent serum glucose concentrations in different units.
 
-## Reading the files
+The strong correlation between these variables illustrates that they contain largely redundant information. Including both representations in the same analysis may unnecessarily increase the number of features. Therefore, only one representation of the same measurement should generally be selected for further analyses.
 
-Two practical pitfalls are handled here:
+#### Correlation between clinical variables
 
-* **Column type guessing.** `read_csv()` guesses each column's type from the
-  first 1 000 rows by default. Many NHANES variables are empty for the first
-  1 000 participants (e.g. variables measured only in a subsample), so a column
-  can be guessed wrongly and its later values silently turned into `NA`. We
-  therefore let readr look at all rows (`guess_max`).
-* **Encoding of the codebook.** The codebook is not UTF-8 but Windows-1252
-  (it contains typographic apostrophes and the `µ` sign); reading it with the
-  default encoding fails or garbles the labels.
+```{r}
+correlation_vars <- c(
+  "RIDAGEYR", "BMXWT", "BMXHT", "BMXBMI",
+  "BMXWAIST", "BPXOSY1", "BPXOSY2", "BPXOSY3",
+  "LBXGH", "LBXSGL", "LBXTC", "LBXSTR",
+  "LBXHSCRP"
+)
 
-```{r load}
-nhanes_raw <- load_raw_data()    # defined in R/utils.R: read_csv() with guess_max = 20000
-codebook   <- load_codebook()    # defined in R/utils.R: Windows-1252 encoding
-```
-
-What would have gone wrong with the default `guess_max`? We read the file a
-second time with default settings and compare how many values are present in
-each column.
-
-```{r guess-max-check}
-nhanes_default <- read_csv(paths$raw_data, show_col_types = FALSE)   # readr defaults
-values_lost <- tibble(
-  variable      = names(nhanes_raw),
-  present_full  = colSums(!is.na(nhanes_raw)),
-  present_guess = colSums(!is.na(nhanes_default))
-) %>%
-  filter(present_full != present_guess)
-
-nrow(values_lost)   # number of columns that would have lost values
-values_lost
-rm(nhanes_default)
-```
-
-## Basic integrity checks
-
-```{r integrity}
-dim(nhanes_raw)                                     # participants x variables
-
-# Is SEQN a unique participant identifier (one row = one person)?
-n_distinct(nhanes_raw$SEQN) == nrow(nhanes_raw)
-
-# Do data and codebook describe exactly the same variables, in the same order?
-setequal(names(nhanes_raw), codebook$variable)
-identical(names(nhanes_raw), codebook$variable)
-
-# How were the columns read?
-table(map_chr(nhanes_raw, ~ class(.x)[1]))
-names(nhanes_raw)[map_lgl(nhanes_raw, is.character)]  # the only non-numeric column(s)
-
-# Completely empty variables (read as "logical" because there is nothing to guess from)
-names(nhanes_raw)[colSums(!is.na(nhanes_raw)) == 0]
-```
-
-# What kinds of variables are there?
-
-The 486 columns are not all "features". Using the codebook we give every
-variable a **role**:
-
-* `identifier`: SEQN.
-* `survey design / weight`: sampling weights (`WT...`) and design variables
-  (strata, PSU, release cycle). They describe how participants were sampled,
-  not the participants themselves.
-* `comment code`: flags belonging to another variable, mostly "value was below
-  the limit of detection" (see section 6).
-* `unit duplicate`: the same measurement reported a second time in another unit
-  (e.g. cholesterol in mg/dL **and** mmol/L). Detected as two variables in the
-  same data file whose labels are identical apart from the unit in brackets.
-* `measurement`: everything else, i.e. the actual candidate features.
-
-```{r variable-roles}
-n_distinct_values <- map_int(nhanes_raw, ~ n_distinct(.x, na.rm = TRUE))
-pct_missing_all   <- colMeans(is.na(nhanes_raw)) * 100
-
-var_info <- codebook %>%
-  mutate(
-    position    = row_number(),
-    n_distinct  = n_distinct_values[variable],
-    pct_missing = pct_missing_all[variable],
-    # label without a trailing "(unit)", used to find unit duplicates
-    base_label  = str_trim(str_remove(label, "\\s*\\([^()]*\\)\\s*$")),
-    role = case_when(
-      variable == "SEQN" ~ "identifier",
-      str_detect(variable, "^WT") |
-        variable %in% c("SDDSRVYR", "SDMVSTRA", "SDMVPSU") ~ "survey design / weight",
-      str_detect(label, regex("comment|cmt|comt", ignore_case = TRUE)) ~ "comment code",
-      TRUE ~ "measurement"
-    )
-  ) %>%
-  # second (and later) variable with the same base label in the same file =
-  # unit duplicate. FASTQX_L is excluded: there "(hours)" and "(minutes)" are
-  # two halves of one duration, not duplicates.
-  group_by(file, base_label, role) %>%
-  mutate(role = if_else(role == "measurement" & file != "FASTQX_L" & row_number() > 1,
-                        "unit duplicate", role)) %>%
-  ungroup()
-
-count(var_info, role)
-```
-
-The unit duplicates that were detected (checked numerically in section 9):
-
-```{r unit-duplicates}
-var_info %>% filter(role == "unit duplicate") %>% select(variable, label, file) %>%
-  knitr::kable()
-```
-
-For the measurement variables we also make a first, **heuristic** guess of the
-data type from the number of distinct values. This is only a starting point:
-whether a coded variable is nominal or ordinal (e.g. education level) must be
-checked in the NHANES documentation for each variable that we end up using.
-
-```{r variable-types}
-var_info <- var_info %>%
-  mutate(type_guess = case_when(
-    role != "measurement" ~ NA_character_,
-    n_distinct <= 2       ~ "binary",
-    n_distinct <= 15      ~ "categorical / coded",
-    TRUE                  ~ "continuous / count"
-  ))
-
-var_info %>% filter(role == "measurement") %>%
-  count(component, type_guess) %>%
-  pivot_wider(names_from = type_guess, values_from = n, values_fill = 0) %>%
-  knitr::kable()
-```
-
-```{r fig-variable-roles, fig.height = 8}
-ggplot(var_info, aes(y = fct_rev(fct_inorder(file)), fill = role)) +
-  geom_bar() +
-  facet_grid(component ~ ., scales = "free_y", space = "free_y") +
-  scale_fill_manual(values = okabe_ito) +
-  labs(x = "number of variables", y = "NHANES data file", fill = "role",
-       title = "Composition of the merged file: only part of the 486 columns are features") +
-  theme(strip.text.y = element_text(angle = 0), legend.position = "bottom")
-```
-
-# Who is in the data?
-
-```{r participants}
-participants <- nhanes_raw %>%
-  transmute(
-    SEQN,
-    age    = RIDAGEYR,
-    sex    = factor(RIAGENDR, levels = 1:2, labels = c("Male", "Female")),
-    status = factor(RIDSTATR, levels = 1:2,
-                    labels = c("Interview only", "Interview + examination")),
-    ethnicity = factor(RIDRETH3, levels = c(1, 2, 3, 4, 6, 7),
-                       labels = c("Mexican American", "Other Hispanic",
-                                  "Non-Hispanic White", "Non-Hispanic Black",
-                                  "Non-Hispanic Asian", "Other / multiracial")),
-    group = case_when(
-      RIDSTATR == 1  ~ "Interview only",
-      RIDAGEYR < 20  ~ "Examined, < 20 y",
-      TRUE           ~ "Examined, \u2265 20 y"
-    ) %>% factor(levels = c("Interview only", "Examined, < 20 y", "Examined, \u2265 20 y"))
+correlation_matrix <- nhanes %>%
+  filter(RIDSTATR == 2, RIDAGEYR >= 20) %>%
+  select(all_of(correlation_vars)) %>%
+  cor(
+    method = "spearman",
+    use = "pairwise.complete.obs"
   )
 
-count(participants, status)
-count(participants, group)
-count(participants, sex)
-sum(participants$age == 80)   # participants at the age cap
+round(correlation_matrix, 2)
 ```
 
-```{r fig-age-sex, fig.height = 5}
-ggplot(participants, aes(x = age, fill = sex)) +
-  geom_histogram(binwidth = 1, boundary = 0) +
-  geom_vline(xintercept = 20, linetype = "dashed") +
-  annotate("text", x = 78, y = Inf, vjust = 1.5, hjust = 1, size = 3.2,
-           label = "spike at 80:\nall ages \u2265 80 are\nrecorded as 80") +
-  facet_wrap(~ status, ncol = 1) +
-  scale_fill_manual(values = okabe_ito[c(2, 1)]) +
-  labs(x = "age at screening (years)", y = "participants",
-       title = "Age distribution: children are included, ages above 80 are capped",
-       subtitle = "dashed line = age 20, the usual lower limit for adult analyses")
+```{r}
+correlation_long <- as_tibble(
+  correlation_matrix,
+  rownames = "variable1"
+) %>%
+  pivot_longer(
+    cols = -variable1,
+    names_to = "variable2",
+    values_to = "correlation"
+  )
 ```
 
-```{r fig-ethnicity, fig.height = 3.5}
-ggplot(participants, aes(y = fct_rev(fct_infreq(ethnicity)))) +
-  geom_bar(fill = okabe_ito[4]) +
-  geom_text(aes(label = after_stat(count)), stat = "count", hjust = -0.2, size = 3.2) +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.12))) +
-  labs(x = "participants", y = NULL, title = "Self-reported race / Hispanic origin (RIDRETH3)")
-```
-
-# Missing data
-
-## How much is missing per variable?
-
-```{r fig-missing-per-variable}
-pct_interview_only <- 100 * mean(nhanes_raw$RIDSTATR == 1)
-
-var_info %>%
-  filter(role == "measurement") %>%
-  ggplot(aes(x = fct_reorder(variable, pct_missing), y = pct_missing, colour = component)) +
-  geom_point(size = 1) +
-  geom_hline(yintercept = pct_interview_only, linetype = "dashed") +
-  annotate("text", x = 5, y = pct_interview_only + 4, hjust = 0, size = 3.2,
-           label = sprintf("%.1f %% of participants were never examined", pct_interview_only)) +
-  scale_colour_manual(values = okabe_ito) +
-  scale_y_continuous(limits = c(0, 100)) +
-  labs(x = "measurement variables, sorted by % missing", y = "% missing",
-       title = "No lab or exam variable can be less incomplete than the share of non-examined participants") +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
-        legend.position = "bottom")
-```
-
-## Is missingness random, or caused by the study design?
-
-If values were missing completely at random (MCAR), the percentage missing
-would be similar in every group of participants. Here we compare three groups
-defined by the design: not examined, examined children/teenagers, examined
-adults. Each tile is the average % missing over all measurement variables of
-one data file.
-
-```{r missing-by-group}
-measurement_vars <- var_info %>% filter(role == "measurement") %>% pull(variable)
-
-missing_by_group <- nhanes_raw %>%
-  mutate(group = participants$group) %>%
-  group_by(group) %>%
-  summarise(across(all_of(measurement_vars), ~ 100 * mean(is.na(.x)))) %>%
-  pivot_longer(-group, names_to = "variable", values_to = "pct_missing") %>%
-  left_join(select(var_info, variable, file, component), by = "variable") %>%
-  group_by(group, component, file) %>%
-  summarise(pct_missing = mean(pct_missing), .groups = "drop")
-```
-
-```{r fig-missing-by-group, fig.height = 9}
-ggplot(missing_by_group, aes(x = group, y = fct_rev(fct_inorder(file)), fill = pct_missing)) +
-  geom_tile(colour = "white") +
-  geom_text(aes(label = round(pct_missing)), size = 3) +
-  facet_grid(component ~ ., scales = "free_y", space = "free_y") +
-  scale_fill_gradient(low = "white", high = okabe_ito[6], limits = c(0, 100)) +
-  labs(x = NULL, y = "NHANES data file", fill = "% missing",
-       title = "Missingness depends on who was examined and on their age: it is not MCAR") +
-  theme(strip.text.y = element_text(angle = 0))
-```
-
-## Missingness pattern at the participant level
-
-A random subset of 400 participants (rows, sorted by age within each group) by
-all measurement variables (columns, in codebook order). Vertical blocks of
-missing values that start and stop at file boundaries show that whole lab
-panels are either measured or not (subsamples).
-
-```{r fig-missing-matrix, fig.height = 7, fig.width = 11}
-subset_ids <- participants %>% slice_sample(n = 400) %>% arrange(group, age) %>%
-  mutate(row = row_number())
-
-nhanes_raw %>%
-  filter(SEQN %in% subset_ids$SEQN) %>%
-  select(SEQN, all_of(measurement_vars)) %>%
-  mutate(across(-SEQN, is.na)) %>%
-  pivot_longer(-SEQN, names_to = "variable", values_to = "missing") %>%
-  left_join(select(subset_ids, SEQN, row, group), by = "SEQN") %>%
-  left_join(select(var_info, variable, position, component), by = "variable") %>%
-  mutate(column = dense_rank(position)) %>%   # consecutive columns, no gaps
-  ggplot(aes(x = column, y = row, fill = missing)) +
-  geom_raster() +
-  facet_grid(group ~ component, scales = "free", space = "free",
-             labeller = labeller(component = c(Demographics = "Demo", Examination = "Exam",
-                                               Laboratory = "Laboratory",
-                                               Questionnaire = "Questionnaire"))) +
-  scale_fill_manual(values = c(`FALSE` = "grey85", `TRUE` = "black"),
-                    labels = c("present", "missing")) +
-  scale_y_reverse() +
-  labs(x = "variables (codebook order)", y = "participants (sorted by age)", fill = NULL,
-       title = "Missingness comes in blocks: whole lab panels are measured or not") +
-  theme(axis.text = element_blank(), axis.ticks = element_blank(),
-        strip.text.y = element_text(angle = 0), legend.position = "bottom")
-```
-
-# Values that are not real measurements
-
-## Codes for "refused" and "don't know"
-
-NHANES stores answers such as *refused* and *don't know* as numbers
-(typically 7/9, 77/99, 777/999, ...) instead of `NA`. `is.na()` does not see
-them, and a mean or regression would treat them as real values.
-
-Detection rule (heuristic): for every questionnaire, demographic and fasting
-variable, a value from {7, 9, 77, 99, 777, 999, ...} is flagged when it is
-**larger than every other value of that variable, with a gap** (more than 1
-above the largest regular value). This catches e.g. the 9 in education
-(regular values 1–5) but not a real answer of 7 drinks per day, nor real
-categories that simply continue the scale, such as code 7 "other race /
-multiracial" in RIDRETH3 (values 1, 2, 3, 4, 6, 7) or "7 or more people" in
-household size (1–7). Every
-flagged variable must still be checked against the NHANES documentation.
-
-```{r special-codes}
-code_values <- c(7, 9, 77, 99, 777, 999, 7777, 9999, 77777, 99999, 777777, 999999)
-
-scan_vars <- var_info %>%
-  filter(role == "measurement",
-         component %in% c("Demographics", "Questionnaire") | file == "FASTQX_L") %>%
-  pull(variable)
-
-find_special_codes <- function(x) {
-  x <- x[!is.na(x)]
-  if (!is.numeric(x)) return(NULL)
-  regular <- x[!x %in% code_values]
-  if (length(regular) == 0) return(NULL)
-  suspects <- x[x %in% code_values & x > max(regular) + 1]
-  if (length(suspects) == 0) return(NULL)
-  count(tibble(code = suspects), code)
-}
-
-special_codes <- map(set_names(scan_vars), ~ find_special_codes(nhanes_raw[[.x]])) %>%
-  compact() %>%
-  bind_rows(.id = "variable") %>%
-  left_join(select(var_info, variable, label), by = "variable") %>%
-  relocate(label, .after = variable)
-
-knitr::kable(special_codes)
-```
-
-## Capped (top-coded) values
-
-Some continuous variables are capped for privacy reasons: everybody above the
-cap gets the cap value. This shows up as a spike at the maximum.
-
-```{r fig-top-coding, fig.height = 3.5}
-p_age <- ggplot(nhanes_raw, aes(RIDAGEYR)) +
-  geom_histogram(binwidth = 1, fill = okabe_ito[2]) +
-  labs(x = "age (RIDAGEYR), cap = 80", y = "participants")
-p_pir <- ggplot(filter(nhanes_raw, !is.na(INDFMPIR)), aes(INDFMPIR)) +
-  geom_histogram(binwidth = 0.1, fill = okabe_ito[2]) +
-  labs(x = "income-to-poverty ratio (INDFMPIR), cap = 5", y = "participants")
-p_age + p_pir + plot_annotation(title = "Top-coded variables: a spike at the maximum value")
-```
-
-```{r top-coding-counts}
-c(age_80 = sum(nhanes_raw$RIDAGEYR == 80),
-  income_ratio_5 = sum(nhanes_raw$INDFMPIR == 5, na.rm = TRUE))
-```
-
-## Values below the limit of detection (LOD)
-
-For many lab tests a comment code tells whether the value was **below the
-limit of detection** (code 1) or not (code 0). For those results NHANES does
-not store the (unknown) true value but a fixed substitute (LOD / √2). Each
-comment code is linked to the measurement it belongs to (the nearest preceding
-measurement variable in the same file).
-
-```{r lod}
-measurement_positions <- var_info %>% filter(role == "measurement") %>%
-  select(position, file, variable)
-
-lod_info <- var_info %>%
-  filter(role == "comment code", component == "Laboratory") %>%
-  select(comment_variable = variable, position, file) %>%
-  mutate(variable = map2_chr(position, file, function(p, f) {
-    measurement_positions %>% filter(file == f, position < p) %>%
-      slice_max(position, n = 1) %>% pull(variable)
-  })) %>%
-  mutate(
-    n_measured    = map_int(comment_variable, ~ sum(!is.na(nhanes_raw[[.x]]))),
-    pct_below_lod = map_dbl(comment_variable, ~ 100 * mean(nhanes_raw[[.x]] == 1, na.rm = TRUE))
-  ) %>%
-  left_join(select(var_info, variable, label), by = "variable")
-
-# sanity check: comment codes only contain 0 / 1
-map(lod_info$comment_variable, ~ unique(na.omit(nhanes_raw[[.x]]))) %>% unlist() %>% unique()
-
-summarise(lod_info,
-          n_lab_tests_with_lod_flag = n(),
-          more_than_half_below_lod  = sum(pct_below_lod > 50))
-```
-
-```{r fig-lod, fig.height = 13}
-lod_info %>%
-  filter(pct_below_lod > 0) %>%
-  mutate(label = str_trunc(label, 45)) %>%
-  ggplot(aes(x = pct_below_lod, y = fct_reorder(label, pct_below_lod), fill = file)) +
-  geom_col() +
-  geom_vline(xintercept = 50, linetype = "dashed") +
-  scale_fill_manual(values = rep(okabe_ito, 2)) +
-  labs(x = "% of measured participants below the limit of detection", y = NULL,
-       fill = "data file",
-       title = "Many exposure markers (VOCs, PFAS, metals) are mostly below the detection limit",
-       subtitle = "only lab tests with at least one value below LOD are shown") +
-  theme(axis.text.y = element_text(size = 7))
-```
-
-What this looks like in the values themselves, for blood cadmium:
-
-```{r fig-lod-cadmium, fig.height = 3.5}
-nhanes_raw %>%
-  filter(!is.na(LBXBCD)) %>%
-  mutate(below_lod = factor(LBDBCDLC, levels = 0:1, labels = c("measured", "below LOD"))) %>%
-  ggplot(aes(x = LBXBCD, fill = below_lod)) +
-  geom_histogram(bins = 60) +
-  scale_x_log10() +
-  scale_fill_manual(values = okabe_ito[c(2, 6)]) +
-  labs(x = "blood cadmium (\u00b5g/L, log scale)", y = "participants", fill = NULL,
-       title = "All values below the LOD share one substitute value: a spike, not real variation")
-```
-
-# Distributions of the continuous measurements
-
-From here on we look at **examined** participants only, because the others
-have no exam or lab data.
-
-```{r distribution-summary}
-examined <- nhanes_raw %>% filter(RIDSTATR == 2)
-
-skewness <- function(x) {
-  x <- x[!is.na(x)]
-  if (length(x) < 3 || sd(x) == 0) return(NA_real_)
-  mean((x - mean(x))^3) / sd(x)^3
-}
-
-continuous_vars <- var_info %>%
-  filter(type_guess == "continuous / count", component %in% c("Examination", "Laboratory")) %>%
-  pull(variable)
-
-distribution_summary <- map_dfr(continuous_vars, function(v) {
-  x <- examined[[v]]
-  tibble(variable = v, n = sum(!is.na(x)),
-         min = min(x, na.rm = TRUE), median = median(x, na.rm = TRUE),
-         max = max(x, na.rm = TRUE), skewness = skewness(x))
-}) %>%
-  left_join(select(var_info, variable, label), by = "variable")
-
-length(continuous_vars)
-sum(distribution_summary$skewness > 1, na.rm = TRUE)   # strongly right-skewed
-sum(distribution_summary$min < 0)                      # impossible negative values?
-
-distribution_summary %>% slice_max(skewness, n = 10) %>%
-  select(variable, label, min, median, max, skewness) %>%
-  knitr::kable(digits = 2)
-```
-
-```{r fig-skewness, fig.height = 3.5}
-ggplot(distribution_summary, aes(skewness)) +
-  geom_histogram(bins = 50, fill = okabe_ito[4]) +
-  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
-  scale_x_continuous(trans = pseudo_log_trans(base = 10),
-                     breaks = c(-10, -1, 0, 1, 10, 100)) +
-  labs(x = "skewness (pseudo-log axis)", y = "number of variables",
-       title = "Most continuous lab variables are strongly right-skewed (skewness > 1)")
-```
-
-Raw versus log-transformed distributions for a few key variables (examined
-adults):
-
-```{r fig-raw-vs-log, fig.height = 6, fig.width = 11}
-key_vars <- c("BMXBMI", "LBXGH", "LBXHSCRP", "LBXCOT", "LBXSATSI", "LBXBPB")
-key_labels <- var_info %>% filter(variable %in% key_vars) %>%
-  mutate(facet = str_wrap(paste0(variable, ": ", label), 22)) %>%
-  select(variable, facet)
-
-key_long <- examined %>%
-  filter(RIDAGEYR >= 20) %>%
-  select(all_of(key_vars)) %>%
-  pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
-  filter(!is.na(value)) %>%
-  left_join(key_labels, by = "variable")
-
-p_raw <- ggplot(key_long, aes(value)) +
-  geom_histogram(bins = 50, fill = okabe_ito[2]) +
-  facet_wrap(~ facet, nrow = 1, scales = "free") +
-  labs(x = "raw value", y = "participants")
-p_log <- ggplot(key_long, aes(log10(value))) +
-  geom_histogram(bins = 50, fill = okabe_ito[3]) +
-  facet_wrap(~ facet, nrow = 1, scales = "free") +
-  labs(x = "log10(value)", y = "participants")
-
-p_raw / p_log +
-  plot_annotation(title = "Log transformation makes most skewed variables roughly symmetric",
-                  subtitle = paste("cotinine: spike = values below the LOD, then two groups (non-smokers vs. smokers);",
-                                   "HbA1c keeps a right tail (diabetes range)")) &
-  theme(strip.text = element_text(size = 7))
-```
-
-Some variables are not skewed but **bimodal because of biology**, for example
-testosterone, which differs by an order of magnitude between men and women:
-
-```{r fig-testosterone, fig.height = 3.5}
-examined %>%
-  filter(RIDAGEYR >= 20, !is.na(LBXTST)) %>%
-  mutate(sex = factor(RIAGENDR, 1:2, c("Male", "Female"))) %>%
-  ggplot(aes(x = LBXTST, fill = sex)) +
-  geom_density(alpha = 0.6, colour = NA) +
-  scale_x_log10() +
-  scale_fill_manual(values = okabe_ito[c(2, 1)]) +
-  labs(x = "total testosterone (ng/dL, log scale)", y = "density", fill = NULL,
-       title = "Testosterone: two populations, so analyses must account for sex")
-```
-
-# Outliers
-
-Outliers are flagged with the box-plot (IQR) rule: below Q1 − 1.5·IQR or
-above Q3 + 1.5·IQR. On skewed data this rule flags many values that are simply
-the long tail of the distribution, so we compare the raw scale with the log
-scale (variables with only positive values).
-
-```{r outliers}
-iqr_outlier_pct <- function(x) {
-  x <- x[!is.na(x)]
-  q <- quantile(x, c(0.25, 0.75)); iqr <- diff(q)
-  100 * mean(x < q[1] - 1.5 * iqr | x > q[2] + 1.5 * iqr)
-}
-
-outlier_summary <- map_dfr(continuous_vars, function(v) {
-  x <- examined[[v]]
-  tibble(variable = v,
-         pct_outlier_raw = iqr_outlier_pct(x),
-         pct_outlier_log = if (min(x, na.rm = TRUE) > 0) iqr_outlier_pct(log10(x)) else NA_real_)
-})
-
-summarise(outlier_summary,
-          median_pct_raw = median(pct_outlier_raw),
-          median_pct_log = median(pct_outlier_log, na.rm = TRUE))
-```
-
-```{r fig-outliers, fig.height = 4.5, fig.width = 5.5}
-ggplot(outlier_summary, aes(pct_outlier_raw, pct_outlier_log)) +
-  geom_abline(linetype = "dashed") +
-  geom_point(colour = okabe_ito[4], alpha = 0.7) +
-  coord_equal() +
-  labs(x = "% flagged as outlier, raw scale", y = "% flagged, log10 scale",
-       title = "Most 'outliers' disappear\nafter log transformation")
-```
-
-Plausibility check on a few clinical variables (examined adults): are there
-values that are physiologically impossible rather than just extreme?
-
-```{r plausibility}
-examined %>%
-  filter(RIDAGEYR >= 20) %>%
-  select(BMXBMI, BMXHT, BMXWT, BPXOSY1, BPXODI1, BPXOPLS1, LBXGH, LBXHGB) %>%
-  pivot_longer(everything(), names_to = "variable") %>%
-  group_by(variable) %>%
-  summarise(n = sum(!is.na(value)), min = min(value, na.rm = TRUE),
-            median = median(value, na.rm = TRUE), max = max(value, na.rm = TRUE)) %>%
-  left_join(select(var_info, variable, label), by = "variable") %>%
-  knitr::kable(digits = 1)
-```
-
-# Redundancy and correlation
-
-## Unit duplicates are perfectly correlated
-
-```{r duplicate-correlation}
-duplicate_pairs <- var_info %>%
-  filter(role %in% c("measurement", "unit duplicate"), file != "FASTQX_L") %>%
-  group_by(file, base_label) %>% filter(n() > 1) %>%
-  summarise(primary = first(variable), duplicate = nth(variable, 2), .groups = "drop") %>%
-  mutate(correlation = map2_dbl(primary, duplicate,
-                                ~ cor(nhanes_raw[[.x]], nhanes_raw[[.y]], use = "complete.obs")))
-
-nrow(duplicate_pairs)
-summary(duplicate_pairs$correlation)
-
-# pairs that are not exactly 1 (rounding of low values in one of the two units)
-duplicate_pairs %>% filter(correlation < 0.999)
-```
-
-## Correlation between key clinical variables
-
-Spearman correlation (rank-based, so robust to skewness and outliers) between
-key variables in examined adults, ordered by hierarchical clustering. The three
-replicate blood-pressure readings are included on purpose.
-
-```{r fig-correlation, fig.height = 8, fig.width = 9}
-corr_vars <- c("RIDAGEYR", "INDFMPIR", "BMXWT", "BMXHT", "BMXBMI", "BMXWAIST", "BMXHIP",
-               "BMXARMC", "BPXOSY1", "BPXOSY2", "BPXOSY3", "BPXODI1", "BPXOPLS1",
-               "LBXGH", "LBXSGL", "LBDHDD", "LBXTC", "LBXSTR", "LBXHSCRP", "LBXWBCSI",
-               "LBXHGB", "LBXPLTSI", "LBXCOT", "LBXSATSI", "LBXSASSI", "LBXSGTSI",
-               "LBXSCR", "LBXSUA", "LBXVIDMS", "LBXBPB", "LBXBCD", "LBXSAL")
-
-corr_mat <- examined %>%
-  filter(RIDAGEYR >= 20) %>%
-  select(all_of(corr_vars)) %>%
-  cor(method = "spearman", use = "pairwise.complete.obs")
-
-var_order <- rownames(corr_mat)[hclust(as.dist(1 - abs(corr_mat)))$order]
-
-as_tibble(corr_mat, rownames = "var1") %>%
-  pivot_longer(-var1, names_to = "var2", values_to = "rho") %>%
-  mutate(var1 = factor(var1, var_order), var2 = factor(var2, var_order)) %>%
-  ggplot(aes(var1, var2, fill = rho)) +
+```{r}
+ggplot(correlation_long,
+       aes(x = variable1, y = variable2,
+           fill = correlation)) +
   geom_tile() +
-  scale_fill_gradient2(low = okabe_ito[4], mid = "white", high = okabe_ito[5],
-                       limits = c(-1, 1)) +
-  coord_equal() +
-  labs(x = NULL, y = NULL, fill = "Spearman \u03c1",
-       title = "Correlation structure of key variables (examined adults)",
-       subtitle = "blocks: body size, blood pressure (3 replicate readings), liver enzymes, lipids") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  labs(
+    title = "Spearman correlation between clinical variables",
+    x = NULL,
+    y = NULL,
+    fill = "Correlation"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
 ```
 
-# Quality control with PCA: biology or technical factors?
+Spearman correlation was used to investigate relationships between selected clinical variables. Strong correlations may indicate that variables provide overlapping information, as expected for repeated measurements or related clinical characteristics.
 
-To check whether participants group by biology or by a technical factor, we run
-an **exploratory** PCA on examined adults. Two technical / design factors are
-available: the six-month period of the examination (`RIDEXMON`, season) and
-the examination session (`PHDSESNZ`; 0 = morning, 1 = afternoon/evening, which
-also determines whether the participant was fasting).
+However, correlation does not necessarily imply that two variables represent the same biological information. Decisions regarding variable selection should therefore consider both the observed correlations and the biological meaning of the variables.
 
-Choices made only for this exploration (the final ones belong in the
-preprocessing script):
+Strong positive correlations were observed between BMI and waist circumference (ρ = 0.90) and between BMI and body weight (ρ = 0.87). Furthermore, the three repeated systolic blood pressure measurements are strongly correlated, with Spearman correlation coefficients ranging from 0.91 to 0.93.
 
-* continuous exam and lab measurements with < 10 % missing in examined adults;
-* complete cases only;
-* log10 transformation of right-skewed variables (skewness > 1); a small offset
-  (half the smallest positive value) is added when a variable contains zeros;
-* standardisation (mean 0, SD 1) so that no variable dominates through its unit.
+These findings indicate that certain variables contain overlapping information. However, their biological meaning should also be considered when deciding which variables to include in subsequent analyses.
 
-```{r pca}
-adults_examined <- examined %>% filter(RIDAGEYR >= 20)
+#### Variables with other purposes 
+The dataset also contains variables that serve purposes other than representing biological or clinical measurements, including participant identifiers, survey weights, survey design variables and laboratory comment codes.
 
-pca_vars <- continuous_vars[colMeans(is.na(adults_examined[continuous_vars])) < 0.10]
+Although these variables may not be suitable as ordinary predictors, they contain important information about the study design and measurement quality. Therefore, they should be distinguished from candidate analysis features rather than automatically removed from the dataset.
 
-pca_input <- adults_examined %>%
-  select(SEQN, RIDAGEYR, RIAGENDR, RIDEXMON, PHDSESNZ, all_of(pca_vars)) %>%
-  drop_na(all_of(pca_vars))
+NHANES uses a complex survey design. If subsequent analyses are performed without accounting for survey weights and design variables, the results should be interpreted as findings within the analysed sample rather than as nationally representative estimates.
 
-log_if_skewed <- function(x) {
-  if (skewness(x) <= 1 || min(x) < 0) return(x)
-  offset <- if (min(x) == 0) min(x[x > 0]) / 2 else 0
-  log10(x + offset)
-}
+### Interpretation and implications
 
-pca_matrix <- pca_input %>% select(all_of(pca_vars)) %>%
-  mutate(across(everything(), log_if_skewed)) %>%
-  as.matrix()
+Several additional data quality considerations were identified during the exploratory analysis.
 
-pca <- prcomp(pca_matrix, center = TRUE, scale. = TRUE)
+| Finding | Implication for preprocessing |
+|---|---|
+| Special response codes | Recode confirmed invalid response codes as missing values. |
+| Top-coded values | Retain these observations and consider their limitations during interpretation. |
+| Values below the LOD | Consider the proportion of substituted values when selecting laboratory variables. |
+| Skewed distributions | Consider transformations when required for subsequent analyses. |
+| Potential outliers | Investigate biological plausibility before considering exclusion. |
+| Completely missing and constant variables | Consider exclusion from analysis datasets. |
+| Duplicate measurements in different units | Select one representation of the same measurement. |
+| Strongly correlated variables | Consider redundancy and potential multicollinearity. |
+| Identifiers and survey design variables | Retain as metadata and use when appropriate. |
 
-c(variables = length(pca_vars), participants = nrow(pca_input),
-  dropped_incomplete = nrow(adults_examined) - nrow(pca_input))
-```
+The exploratory analysis highlights that not all unusual observations represent data quality problems. Some reflect the NHANES study design, analytical limitations or genuine biological variation.
 
-```{r fig-pca-scree, fig.height = 3.5}
-tibble(PC = seq_along(pca$sdev), var_explained = 100 * pca$sdev^2 / sum(pca$sdev^2)) %>%
-  slice_head(n = 15) %>%
-  ggplot(aes(PC, var_explained)) +
-  geom_col(fill = okabe_ito[4]) +
-  geom_line() + geom_point() +
-  labs(x = "principal component", y = "% variance explained",
-       title = "Scree plot: variance is spread over many components")
-```
+No modifications were made to the original dataset during this exploratory phase. The findings will be used to guide and justify the preprocessing decisions in the next section.
 
-```{r fig-pca-scores, fig.height = 8, fig.width = 10}
-var_pct <- round(100 * pca$sdev^2 / sum(pca$sdev^2), 1)
 
-scores <- as_tibble(pca$x[, 1:2]) %>%
-  bind_cols(pca_input %>% transmute(
-    sex       = factor(RIAGENDR, 1:2, c("Male", "Female")),
-    age_group = cut(RIDAGEYR, c(19, 39, 59, 80), labels = c("20-39", "40-59", "60-80")),
-    period    = factor(RIDEXMON, 1:2, c("Nov-Apr", "May-Oct")),
-    session   = factor(PHDSESNZ, 0:1, c("morning", "afternoon/evening"))
-  ))
-
-pca_panel <- function(colour_var, title) {
-  ggplot(scores, aes(PC1, PC2, colour = .data[[colour_var]])) +
-    geom_point(size = 0.6, alpha = 0.5) +
-    scale_colour_manual(values = okabe_ito, na.value = "grey70") +
-    labs(x = paste0("PC1 (", var_pct[1], " %)"), y = paste0("PC2 (", var_pct[2], " %)"),
-         colour = NULL, title = title) +
-    guides(colour = guide_legend(override.aes = list(size = 2, alpha = 1)))
-}
-
-(pca_panel("sex", "biology: sex") | pca_panel("age_group", "biology: age")) /
-  (pca_panel("period", "technical: six-month period") |
-     pca_panel("session", "technical: exam session")) +
-  plot_annotation(title = "PCA of examined adults coloured by biological and technical factors")
-```
-
-Which variables drive the first two components?
-
-```{r pca-loadings}
-as_tibble(pca$rotation[, 1:2], rownames = "variable") %>%
-  pivot_longer(-variable, names_to = "PC", values_to = "loading") %>%
-  group_by(PC) %>% slice_max(abs(loading), n = 8) %>% ungroup() %>%
-  left_join(select(var_info, variable, label), by = "variable") %>%
-  select(PC, variable, label, loading) %>%
-  knitr::kable(digits = 2)
-```
-
-# Summary: what the preprocessing script has to deal with
-
-```{r summary-numbers, include = FALSE}
-n_measurement  <- sum(var_info$role == "measurement")
-n_not_examined <- sum(nhanes_raw$RIDSTATR == 1)
-n_adults_exam  <- nrow(adults_examined)
-n_dup          <- sum(var_info$role == "unit duplicate")
-n_codes_vars   <- n_distinct(special_codes$variable)
-n_lod_half     <- sum(lod_info$pct_below_lod > 50)
-n_skewed       <- sum(distribution_summary$skewness > 1, na.rm = TRUE)
-```
-
-* **Variables.** Only `r n_measurement` of the 486 columns are candidate
-  features; the others are the identifier, survey weights and design variables,
-  comment codes and `r n_dup` unit duplicates (correlation ≈ 1, keep one of each).
-* **Samples.** `r n_not_examined` participants were interviewed but never
-  examined and have no exam or lab data; children have many adult measures
-  missing by design. Most analyses will use the `r n_adults_exam` examined
-  adults (≥ 20 y).
-* **Missing data are structural, not random.** Missingness follows the study
-  design (examination status, age, fasting and other subsamples). Variables
-  measured only in a subsample must either be analysed within that subsample
-  or left out; imputing them would invent data for people who were never
-  eligible.
-* **Disguised missing values.** `r n_codes_vars` variables contain codes for
-  refused / don't know that must be recoded to `NA` (see table in section 5.1).
-* **Top-coding.** Age (80) and income-to-poverty ratio (5) are capped.
-* **Limit of detection.** `r n_lod_half` lab tests have more than half of the
-  values below the LOD; these values are substitutes, not measurements (MNAR).
-  Such variables carry little information as continuous features.
-* **Skewness.** `r n_skewed` of `r length(continuous_vars)` continuous
-  variables have skewness > 1: log transformation is needed before parametric
-  tests, PCA or distance-based methods. Most IQR "outliers" are tail values of
-  skewed distributions rather than errors.
-* **Biology that must be modelled.** Strong sex differences (e.g.
-  testosterone) and age effects: sex and age are natural adjustment variables.
-* **Survey design.** NHANES is a weighted, stratified sample. Unweighted
-  analyses describe this sample, not the US population (limitation to report).
-
-# Session information
-
-```{r session-info}
-sessionInfo()
-```
