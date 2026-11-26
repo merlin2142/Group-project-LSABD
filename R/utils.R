@@ -67,6 +67,33 @@ load_clean_data <- function() {
   read_csv(paths$clean_data, guess_max = 20000, show_col_types = FALSE)
 }
 
+#' Read the variable table written by 02_preprocessing.Rmd: one row per variable
+#' in the clean data, with label, role, % missing, % below LOD and transformation.
+load_variable_info <- function() {
+  if (!file.exists(paths$clean_vars)) {
+    stop("No variable info found. Knit analysis/02_preprocessing.Rmd first.", call. = FALSE)
+  }
+  read_csv(paths$clean_vars, show_col_types = FALSE)
+}
+
+#' Apply the transformations decided in 02_preprocessing.Rmd.
+#' The clean CSV keeps every variable in its original unit (so tables and plots
+#' stay interpretable); call this function in an analysis when you need the
+#' log10-transformed version. Variables are only transformed when
+#' variable_info$transform == "log10"; `offset` is added first (non-zero only
+#' for variables that contain zeros).
+#' @param vars optional: restrict to these variables
+apply_transformations <- function(data, variable_info = load_variable_info(), vars = NULL) {
+  to_log <- variable_info %>%
+    filter(transform == "log10", variable %in% names(data))
+  if (!is.null(vars)) to_log <- filter(to_log, variable %in% vars)
+  for (i in seq_len(nrow(to_log))) {
+    v <- to_log$variable[i]
+    data[[v]] <- log10(data[[v]] + to_log$offset[i])
+  }
+  data
+}
+
 # ---- Saving output -----------------------------------------------------------
 
 #' Save a ggplot as PNG (for slides/HTML) and PDF (vector, for the report).

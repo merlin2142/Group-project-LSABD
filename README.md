@@ -6,12 +6,19 @@ Group project for Large Scale Analysis of Biomedical Data (UGent, 2026–2027): 
 
 ## Research question
 
-> PLACEHOLDER
+> Is waist circumference associated with HbA1c levels in adults after adjusting for age, BMI, race/ethnicity, serum cotinine levels and educational attainment, and does this association differ between men and women?
 
-PLACEHOLDER
+| | Variable(s) |
+|---|---|
+| **Outcome** | HbA1c (`LBXGH`), average blood glucose over the past 2–3 months, log10-transformed |
+| **Exposure** | waist circumference (`BMXWAIST`) |
+| **Adjusted for** | age (`age`), BMI (`BMXBMI`), race/ethnicity (`ethnicity`), log10 serum cotinine (`LBXCOT`), education (`education`) |
+| **Effect modification** | sex (`sex`): waist × sex interaction |
+| **Population** | examined, non-pregnant adults ≥ 20 y: 6 023 participants, 5 219 (86.7 %) with complete data |
+| **Model** | linear regression: log10(HbA1c) ~ waist × sex + age + BMI + ethnicity + log10(cotinine) + education |
 
-## Progress
-PLACEHOLDER
+Because waist circumference and BMI are strongly correlated (r = 0.90), the waist effect adjusted for BMI is interpreted as the effect of **fat distribution** (more abdominal fat at the same BMI).
+
 
 ## Repository structure
 
