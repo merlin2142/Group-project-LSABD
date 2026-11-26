@@ -11,6 +11,11 @@ output:
 ---
 
 ## Data preprocessing
+The exploratory analysis identified several data quality considerations, including structural missingness, special response codes, inappropriate variable types, uninformative variables, redundant measurements and potential outliers.
+
+Based on these findings, a series of preprocessing steps was performed to improve the quality and usability of the dataset. Each preprocessing decision was guided by the exploratory results, the meaning of the variables and the NHANES study design.
+
+The aim was to address confirmed data quality issues while preserving relevant biological and clinical information. General preprocessing was performed independently of any specific research question, while additional analysis-specific preprocessing will be carried out in Parts 2, 3 and 4.
 
 ```{r setup, include = FALSE}
 source(here::here("R", "utils.R"))
@@ -26,55 +31,185 @@ codebook   <- load_codebook()
 ```
 
 ### Creating a working dataset
-Based on the findings of the exploratory analysis, several preprocessing decisions were made to prepare the dataset for subsequent analyses.
+The initial data exploration confirmed that the dataset contains 11,933 participants and 486 variables, with no missing or duplicated participant identifiers and no completely duplicated rows. Therefore, no observations needed to be removed due to duplication or identification problems.
 
-A separate working dataset was created to ensure that the original NHANES dataset remains unchanged. General preprocessing steps will be applied to this working dataset, whereas analysis-specific preprocessing will be performed separately in Parts 2, 3 and 4.
+A separate working dataset was created to ensure that the original NHANES dataset remains unchanged throughout preprocessing. This allows comparisons between the original and preprocessed datasets and ensures that all modifications remain traceable.
 
 ```{r}
 nhanes <- nhanes_raw
 nhanes_clean <- nhanes
 ```
 
-### Recoding special response codes
-As identified during the exploratory analysis, certain categorical variables contain special response codes representing "Refused" or "Don't know". These codes do not represent valid categories for the characteristics being investigated.
+**Verification**
+```{r}
+dim(nhanes_clean)
+identical(nhanes, nhanes_clean)
+```
 
-The confirmed special response codes for education level (`DMDEDUC2`) and marital status (`DMDMARTZ`) were therefore recoded as `NA`. Recoding was performed on a variable-specific basis to avoid replacing valid numerical observations.
+The working dataset initially contains the same 11,933 participants and 486 variables as the original dataset. No modifications have been made at this stage.
 
+### Handling special response codes
+During the exploratory analysis, several variables were identified as containing potential special response codes, such as "Refused"or "Don't know". These codes represent missing information rather than valid observations.
 
+Since the same numerical value can have different meanings across variables, recoding was performed on a variable-specific basis. The following rules were defined based on the proposed NHANES response code mapping.
+
+```{r}
+# Variables with special response codes 7 and 9
+vars_7_9 <- c(
+  "DMDEDUC2", "DMQMILIZ", "ALQ111", "ALQ151",
+  "DBQ010", "DBQ330", "DBQ360", "DBQ370",
+  "DBQ390", "DBQ400", "DBQ421", "DBQ424",
+  "DBQ930", "DBQ935", "DBQ940", "DBQ945",
+  "ECQ080", "ECQ090", "WHQ030E", "MCQ080E"
+)
+
+# Variables with special response codes 77 and 99
+vars_77_99 <- c(
+  "DMDMARTZ", "DMDBORN4", "DMDYRUSR",
+  "ALQ121", "ALQ142", "ALQ270", "ALQ280"
+)
+
+# Variables with special response codes 777 and 999
+vars_777_999 <- c("ALQ130", "ALQ170")
+
+# Variables with special response codes 7777 and 9999
+vars_7777_9999 <- c(
+  "ECD070A", "ECD070B", "DBD381", "DBD411"
+)
+
+# Variables with special response codes 777777 and 999999
+vars_777777_999999 <- c(
+  "DBD030", "DBD041", "DBD050",
+  "DBD055", "DBD061"
+)
+```
+
+**Recoding special response codes**
 ```{r}
 nhanes_clean <- nhanes_clean %>%
   mutate(
-    DMDEDUC2 = if_else(
-      DMDEDUC2 %in% c(7, 9),
-      NA_real_,
-      DMDEDUC2
-    ),
-    DMDMARTZ = if_else(
-      DMDMARTZ %in% c(77, 99),
-      NA_real_,
-      DMDMARTZ
+    across(all_of(vars_7_9),
+           ~ replace(.x, .x %in% c(7, 9), NA)),
+
+    across(all_of(vars_77_99),
+           ~ replace(.x, .x %in% c(77, 99), NA)),
+
+    across(all_of(vars_777_999),
+           ~ replace(.x, .x %in% c(777, 999), NA)),
+
+    across(all_of(vars_7777_9999),
+           ~ replace(.x, .x %in% c(7777, 9999), NA)),
+
+    across(all_of(vars_777777_999999),
+           ~ replace(.x, .x %in% c(777777, 999999), NA)),
+
+    DBQ073A = replace(DBQ073A, DBQ073A == 99 &
+                       !is.na(DBQ073A), NA)
+  )
+```
+
+**Verification**
+```{r}
+# Compare the number of missing values per variable
+recoding_summary <- data.frame(
+  variable = names(nhanes),
+  missing_before = colSums(is.na(nhanes)),
+  missing_after = colSums(is.na(nhanes_clean))
+)
+
+recoding_summary <- recoding_summary %>%
+  mutate(n_recoded = missing_after - missing_before) %>%
+  filter(n_recoded > 0) %>%
+  arrange(desc(n_recoded))
+
+recoding_summary
+```
+
+```{r}
+# Number of affected variables
+nrow(recoding_summary)
+
+# Total number of recoded values
+sum(recoding_summary$n_recoded)
+
+# Compare dataset dimensions
+dim(nhanes)
+dim(nhanes_clean)
+```
+
+**Interpretation**
+A total of 796 numerical values across 38 variables were recoded as missing values according to the specified recoding rules.
+
+The dimensions of the dataset remained unchanged, with 11,933 participants and 486 variables. No participants or variables were removed during this preprocessing step.
+
+This step ensures that the targeted response codes are represented as missing information rather than numerical observations, provided that the recoding rules correspond to the NHANES documentation.
+
+### Handling meaningful special codes
+Some infant-feeding variables contain numerical codes that represent specific response categories rather than actual measurements.
+
+The value 666666 was investigated separately because it may contain meaningful information and should not automatically be treated as a missing response.
+
+```{r}
+infant_vars <- c(
+  "DBD030", "DBD041", "DBD050",
+  "DBD055", "DBD061"
+)
+
+# Count occurrences of the special code
+colSums(nhanes_clean[infant_vars] == 666666,
+        na.rm = TRUE)
+```
+
+According to the NHANES documentation, the code 666666 represents an age above a variable-specific threshold. These values are therefore top-coded rather than missing responses.
+
+Indicator variables were created to preserve this information. The original codes were replaced by NA because the exact ages are unknown.
+
+```{r}
+# Preserve information about top-coded observations
+nhanes_clean <- nhanes_clean %>%
+  mutate(
+    across(
+      all_of(infant_vars),
+      ~ .x == 666666,
+      .names = "{.col}_topcoded"
+    )
+  )
+
+# Replace top-coded values in the numerical variables
+nhanes_clean <- nhanes_clean %>%
+  mutate(
+    across(
+      all_of(infant_vars),
+      ~ replace(.x, .x %in% 666666, NA)
     )
   )
 ```
 
-```{r}
-# Education level
-table(nhanes$DMDEDUC2, useNA = "ifany")
-table(nhanes_clean$DMDEDUC2, useNA = "ifany")
+**Verification**
 
-# Marital status
-table(nhanes$DMDMARTZ, useNA = "ifany")
-table(nhanes_clean$DMDMARTZ, useNA = "ifany")
+```{r}
+colSums(nhanes_clean[infant_vars] == 666666,
+        na.rm = TRUE)
+
+dim(nhanes_clean)
 ```
 
-A total of 11 education responses and nine marital status responses were recoded as missing values. The remaining valid categories were retained. This ensures that these special response codes are not incorrectly treated as meaningful categories during subsequent analyses.
+**Interpretation**
+A total of 21 top-coded values were identified across five infant-feeding variables. Five indicator variables were created to preserve the information about these observations.
 
-Additional special response codes will be evaluated when the corresponding variables are selected for further analyses.
+The original numerical codes were replaced by NA because the exact ages were unavailable. The infant-feeding variables require further evaluation
+before being used as continuous variables, as some other response codes may also represent specific categories rather than actual ages.
+
+Source: [NHANES Diet Behavior & Nutrition codebook](https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2021/DataFiles/DBQ_L.htm)
+
+The code 0 also denotes a special response (ongoing feeding or never received the food), rather than an exact feeding age. These codes are retained and must be interpreted using the diet questionnaire documentation before analysis.
 
 ### Handling uninformative variables
-The exploratory analysis identified one completely missing variable, `BMIHEAD`. Since this variable contains no observed information, it was removed from the working dataset.
+During the exploratory analysis, completely missing variables and variables with only one unique non-missing value were identified.
 
-Variables with only one unique non-missing value were retained at this stage, as some of them contain information related to measurement quality or study design. Their suitability as analysis features will be evaluated separately.
+Completely missing variables contain no observed information and can therefore be removed. Constant variables were evaluated separately, as some may contain relevant information about measurement availability or the NHANES study design.
+
+**Completely missing variables**
 
 ```{r}
 # Identify completely missing variables
@@ -92,271 +227,982 @@ nhanes_clean <- nhanes_clean %>%
 ```
 
 ```{r}
-# Compare dimensions
-dim(nhanes)
 dim(nhanes_clean)
 ```
 
-After removing the completely missing variable, the working dataset contains 11,933 participants and 485 variables. No participants were removed during this preprocessing step.
+**Constant variables**
 
-### Handling categorical variables 
-Several demographic variables are stored numerically despite representing categorical information. To ensure that these variables are interpreted correctly during subsequent statistical analyses, selected nominal variables were converted into factors, while education level was converted into an ordered factor.
+```{r}
+# Count unique non-missing values per variable
+n_unique <- sapply(
+  nhanes_clean,
+  function(x) n_distinct(x, na.rm = TRUE)
+)
 
-Continuous measurements and quantitative variables were retained in their original numerical format.
+# Identify constant variables
+constant_vars <- names(n_unique[n_unique == 1])
+
+length(constant_vars)
+```
+
+```{r}
+# Examine constant variables and their descriptions
+constant_summary <- data.frame(
+  variable = constant_vars,
+  missing_pct = colMeans(
+    is.na(nhanes_clean[constant_vars])
+  ) * 100
+)
+
+constant_summary <- constant_summary %>%
+  left_join(
+    codebook %>% select(variable, label),
+    by = "variable"
+  ) %>%
+  select(variable, label, missing_pct)
+
+constant_summary
+```
+
+Constant variables without missing values provide no information that distinguishes participants and were therefore removed.
+
+Constant variables containing missing values were retained at this stage, as their missingness patterns or comment codes may provide relevant information about measurement availability and data quality. These variables will not be used as ordinary analysis features.
+
+```{r}
+# Identify fully constant variables
+fully_constant_vars <- constant_summary %>%
+  filter(missing_pct == 0) %>%
+  pull(variable)
+
+fully_constant_vars
+```
+
+```{r}
+# Remove fully constant variables
+nhanes_clean <- nhanes_clean %>%
+  select(-all_of(fully_constant_vars))
+
+dim(nhanes_clean)
+```
+
+**Interpretation**
+
+One completely missing variable (BMIHEAD) and one fully constant variable (SDDSRVYR) were removed from the dataset.
+
+The remaining 50 variables with constant non-missing values were retained because their missingness patterns or comment codes may contain relevant information.
+
+After this preprocessing step, the dataset contains 11,933 participants and 489 variables.
+
+### Handling redundant variables
+Alternative units of the same laboratory measurement were identified using the exploration and codebook. Fasting durations, comment codes and different biological measurements were excluded. The candidate pairs below were screened for correlation and loss of observed measurements. The more complete representation was preferred; ties follow the codebook order. Correlation supports, but does not prove, equivalence after unit conversion.
+
+```{r}
+unit_pairs <- tibble(
+  keep = c("URXUMA", "URXUCR", "LBDHDD", "LBXTLG", "LBDLDL", "LBDLDLM", "LBDLDLN", "LBXTC", "LBXFER", "LBDRFO", "LBXIN", "LBXBPB", "LBXBCD", "LBXTHG", "LBXBSE", "LBXBMN", "LBXIHG", "LBXBGE", "LBXBGM", "LBXGLU", "LBDFOTSI", "LBX17H", "LBXAND", "LBXAMH", "LBXDHE", "LBXEST", "LBXESO", "LBXES1", "LBXPG4", "LBXTST", "LBXSAL", "LBXSBU", "LBXSCR", "LBXSGB", "LBXSGL", "LBXSIR", "LBXSPH", "LBXSTB", "LBXSCA", "LBXSCH", "LBXSTP", "LBXSTR", "LBXSUA", "LBXTFR"),
+  remove = c("URXUMS", "URXCRS", "LBDHDDSI", "LBDTRSI", "LBDLDLSI", "LBDLDMSI", "LBDLDNSI", "LBDTCSI", "LBDFERSI", "LBDRFOSI", "LBDINSI", "LBDBPBSI", "LBDBCDSI", "LBDTHGSI", "LBDBSESI", "LBDBMNSI", "LBDIHGSI", "LBDBGESI", "LBDBGMSI", "LBDGLUSI", "LBDFOT", "LBD17HSI", "LBDANDSI", "LBDAMHSI", "LBDDHESI", "LBDESTSI", "LBDESOSI", "LBDES1SI", "LBDPG4SI", "LBDTSTSI", "LBDSALSI", "LBDSBUSI", "LBDSCRSI", "LBDSGBSI", "LBDSGLSI", "LBDSIRSI", "LBDSPHSI", "LBDSTBSI", "LBDSCASI", "LBDSCHSI", "LBDSTPSI", "LBDSTRSI", "LBDSUASI", "LBDTFRSI")
+)
+
+unit_pairs <- unit_pairs %>%
+  mutate(
+    correlation = map2_dbl(keep, remove, ~ cor(nhanes_clean[[.x]], nhanes_clean[[.y]], use = "complete.obs")),
+    lost_values = map2_int(keep, remove, ~ sum(is.na(nhanes_clean[[.x]]) & !is.na(nhanes_clean[[.y]])))
+  )
+unit_pairs
+stopifnot(all(unit_pairs$correlation > 0.9), all(unit_pairs$lost_values == 0))
+nhanes_clean <- nhanes_clean %>% select(-all_of(unit_pairs$remove))
+dim(nhanes_clean)
+```
+
+All 44 candidate pairs passed the correlation and availability checks in the supplied CSV. Total bilirubin was retained in mg/dL because this representation contains 132 additional observations. The original dataset and the pair list retain the provenance of removed columns. Exact conversion factors have not been audited for every pair.
+
+### Handling survey design variables
+
+Participant identifiers, strata, primary sampling units and survey weights are metadata, not biological features. File-specific weights were retained, including identical copies, to preserve their provenance. The appropriate weight and survey design must be selected according to the variables and eligible population in each analysis.
+
+```{r}
+weight_vars <- grep("^WT", names(nhanes_clean), value = TRUE)
+weight_summary <- tibble(variable = weight_vars,
+                         n_available = colSums(!is.na(nhanes_clean[weight_vars])))
+weight_summary
+```
+
+Unweighted analyses describe the observed sample; population inference requires appropriate survey methods.
+
+### Handling variable types
+During the exploratory analysis, most variables were found to be stored in numerical format. However, several variables represent categorical information rather than quantitative measurements.
+
+Correctly distinguishing between numerical and categorical variables is important to ensure appropriate statistical analysis and interpretation.
+
+Variables with a limited number of unique observed values were screened as potential categorical variables.
+
+```{r}
+# Count unique non-missing values
+n_unique <- sapply(
+  nhanes_clean,
+  function(x) n_distinct(x, na.rm = TRUE)
+)
+
+# Identify potential categorical variables
+potential_categorical <- names(
+  n_unique[n_unique >= 2 & n_unique <= 10]
+)
+
+# Examine variable descriptions
+categorical_summary <- data.frame(
+  variable = potential_categorical,
+  n_unique = n_unique[potential_categorical]
+) %>%
+  left_join(
+    codebook %>% select(variable, label, component),
+    by = "variable"
+  ) %>%
+  select(variable, label, component, n_unique)
+
+categorical_summary
+```
+
+**Nominal variables**
+Nominal variables represent categories without a natural order. Based on the variable descriptions in the codebook, selected nominal variables were converted into factors.
+
+```{r}
+# Record missing values before factor conversion
+missing_before_conversion <- sum(is.na(nhanes_clean))
+```
+
+```{r}
+nominal_vars <- c(
+  # Demographics
+  "RIDSTATR", "RIAGENDR", "RIDRETH1", "RIDRETH3",
+  "RIDEXMON", "DMQMILIZ", "DMDBORN4", "DMDMARTZ",
+  "RIDEXPRG", "DMDHRGND", "DMDHRMAZ",
+
+  # Examination
+  "BPAOARM", "BMDSTATS",
+
+  # Laboratory and fasting questionnaire
+  "PHQ020", "PHQ030", "PHQ040", "PHQ050",
+  "PHQ060", "PHDSESNZ",
+  "LBXHA", "LBXHBS", "LBXHBC", "LBDHBG",
+  "LBXHCR", "LBDHCI", "LBXHCG", "LBDHEG",
+  "LBDHEM", "URXPREG",
+
+  # Questionnaire
+  "ALQ111", "ALQ151", "DBQ010", "DBQ301",
+  "DBQ330", "DBQ360", "DBQ370", "DBQ390",
+  "DBQ400", "DBQ421", "DBQ424", "DBQ930",
+  "DBQ935", "DBQ940", "DBQ945", "ECQ080",
+  "ECQ090", "MCQ080E"
+)
+
+nhanes_clean <- nhanes_clean %>%
+  mutate(across(all_of(nominal_vars), as.factor))
+
+length(nominal_vars)
+```
+
+**Ordinal variables**
+
+Ordinal variables represent categories with a natural order. Selected variables representing ordered categories were converted into ordered factors.
+
+```{r}
+ordinal_vars <- c(
+  "DMDYRUSR",
+  "DMDEDUC2",
+  "DMDHRAGZ",
+  "DMDHREDZ",
+  "DMDHSEDZ",
+  "BPAOCSZ",
+  "BMDBMIC"
+)
+
+nhanes_clean <- nhanes_clean %>%
+  mutate(across(all_of(ordinal_vars), as.ordered))
+
+length(ordinal_vars)
+```
+
+**Variables retained in their original format**
+
+Quantitative variables were retained in their numerical format, even when they contained only a limited number of unique values.
+
+Laboratory comment codes and examination quality indicators were retained in their original format, as they provide information about measurement quality and availability.
+
+Survey design variables were also retained in their original format. The previously created indicators for special infant-feeding responses were retained as logical variables.
+
+**Verification**
+
+```{r}
+# Compare variable types before and after preprocessing
+table(sapply(nhanes, function(x) class(x)[1]))
+
+table(sapply(nhanes_clean, function(x) class(x)[1]))
+```
+
+```{r}
+# Check selected categorical variables
+str(nhanes_clean %>%
+      select(RIAGENDR, RIDRETH3, DMDEDUC2,
+             DMDMARTZ, RIDEXPRG))
+```
+
+```{r}
+# Check missing values after factor conversion
+missing_after_conversion <- sum(is.na(nhanes_clean))
+
+missing_before_conversion
+missing_after_conversion
+
+# Number of additional missing values
+missing_after_conversion - missing_before_conversion
+```
+
+```{r}
+# Check dataset dimensions
+dim(nhanes_clean)
+```
+
+**Interpretation**
+
+A total of 159 potential categorical variables were identified based on the number of unique non-missing values.
+
+Based on the variable descriptions, 47 nominal variables and seven ordinal variables were converted into factors and ordered factors, respectively.
+
+Quantitative measurements, quality indicators and survey design variables were retained in their original format.
+
+The conversion did not introduce additional missing values or alter the dimensions of the dataset.
+
+The working dataset contains 11,933 participants and 445 variables, including 386 numerical variables, 47 nominal factors, seven ordered factors and five logical variables.
+
+### Handling repeated measurements 
+During the exploratory analysis, strong correlations were observed between repeated blood pressure measurements.
+
+To reduce the influence of random measurement variability, mean systolic blood pressure, mean diastolic blood pressure and mean pulse rate were calculated for each participant using the available measurements.
 
 ```{r}
 nhanes_clean <- nhanes_clean %>%
   mutate(
-    RIAGENDR = factor(
-      RIAGENDR,
-      levels = c(1, 2),
-      labels = c("Male", "Female")
+    mean_SBP = rowMeans(
+      select(., BPXOSY1, BPXOSY2, BPXOSY3),
+      na.rm = TRUE
     ),
-
-    RIDSTATR = factor(
-      RIDSTATR,
-      levels = c(1, 2),
-      labels = c("Interview only", "Examined")
+    mean_DBP = rowMeans(
+      select(., BPXODI1, BPXODI2, BPXODI3),
+      na.rm = TRUE
     ),
-
-    RIDRETH3 = factor(
-      RIDRETH3,
-      levels = c(1, 2, 3, 4, 6, 7),
-      labels = c(
-        "Mexican American",
-        "Other Hispanic",
-        "Non-Hispanic White",
-        "Non-Hispanic Black",
-        "Non-Hispanic Asian",
-        "Other race"
-      )
-    ),
-
-    DMDEDUC2 = factor(
-      DMDEDUC2,
-      levels = c(1, 2, 3, 4, 5),
-      labels = c(
-        "Less than 9th grade",
-        "9th-11th grade",
-        "High school graduate",
-        "Some college",
-        "College graduate or above"
-      ),
-      ordered = TRUE
-    ),
-
-    DMDMARTZ = factor(
-      DMDMARTZ,
-      levels = c(1, 2, 3),
-      labels = c(
-        "Married or living with partner",
-        "Widowed, divorced or separated",
-        "Never married"
-        )
-)
+    mean_pulse = rowMeans(
+      select(., BPXOPLS1, BPXOPLS2, BPXOPLS3),
+      na.rm = TRUE
+    )
+  ) %>%
+  mutate(
+    across(
+      c(mean_SBP, mean_DBP, mean_pulse),
+      ~ na_if(.x, NaN)
+    )
   )
 ```
 
-#### Checking the conversion 
+When all repeated measurements were missing, the corresponding mean was recorded as NA.
+
+The original measurements were retained to preserve the available information.
+
+**Verification**
 
 ```{r}
-str(nhanes_clean %>%
-      select(RIAGENDR, RIDSTATR, RIDRETH3,
-             DMDEDUC2, DMDMARTZ))
-```
-
-```{r}
-table(nhanes_clean$RIAGENDR, useNA = "ifany")
-table(nhanes_clean$RIDSTATR, useNA = "ifany")
-table(nhanes_clean$RIDRETH3, useNA = "ifany")
-table(nhanes_clean$DMDEDUC2, useNA = "ifany")
-table(nhanes_clean$DMDMARTZ, useNA = "ifany")
-```
-
-```{r}
-categorical_vars <- c(
-  "RIAGENDR", "RIDSTATR", "RIDRETH3",
-  "DMDEDUC2", "DMDMARTZ"
-)
-
-data.frame(
-  variable = categorical_vars,
-  missing_before = colSums(
-    is.na(nhanes[categorical_vars])
-  ),
-  missing_after = colSums(
-    is.na(nhanes_clean[categorical_vars])
-  )
-)
-```
-
-The selected demographic variables were successfully converted into factors, with education level represented as an ordered factor. The number of missing values remained unchanged, except for the previously recoded special response codes in education level and marital status.
-
-This indicates that the conversion did not introduce additional missing values.
-
-### Handling missing values
-The exploratory analysis demonstrated that a substantial proportion of missing values is related to the NHANES study design, including examination participation and age-dependent eligibility.
-
-Therefore, no global imputation or complete-case filtering was performed. Applying these methods to the entire dataset could introduce inappropriate values or unnecessarily exclude participants with missing information for variables that are not relevant to a particular analysis.
-
-Instead, missing values will be handled separately for each subsequent analysis, depending on the selected variables, study population and statistical method.
-
-### Handling outliers and top-coded values
-Potential outliers identified during the exploratory analysis were retained because extreme clinical measurements may reflect genuine biological variation or pathological conditions rather than measurement errors.
-
-Top-coded observations were also retained, as these values represent valid observations with limited numerical precision.
-
-Similarly, laboratory values below the limit of detection were retained as provided by NHANES. The corresponding comment codes will be considered when evaluating the suitability of individual laboratory variables for subsequent analyses.
-
-No general outlier removal or additional substitution of values below the detection limit was performed.
-
-### Handling redundant variables 
-The exploratory analysis identified several sources of potentially redundant information, including measurements expressed in different units, repeated clinical measurements and strongly correlated biological variables.
-
-These variables were retained in the general working dataset, as their relevance depends on the objectives of subsequent analyses.
-
-When selecting features for individual analyses, duplicate representations of the same measurement will be avoided. Strong correlations between biologically distinct variables will be evaluated in the context of the statistical model rather than used as an automatic exclusion criterion.
-
-### Transformations and scaling
-Although several continuous variables showed right-skewed distributions, no general logarithmic transformation or standardization was applied to the working dataset.
-
-The need for transformation depends on the distribution of individual variables and the assumptions of the selected statistical method. Furthermore, for machine learning applications, preprocessing parameters such as means and standard deviations should be estimated from the training data only to prevent data leakage.
-
-Transformations and scaling will therefore be performed separately when required by subsequent analyses.
-
-### Summary of preprocessing decision
-
-| Data quality issue | Preprocessing decision |
-|---|---|
-| Original dataset | Retained unchanged |
-| Special response codes | Confirmed invalid codes in selected variables recoded as NA |
-| Completely missing variables | Removed |
-| Constant variables | Retained |
-| Categorical variables | Selected variables converted into factors |
-| Missing values | No global imputation or participant exclusion |
-| Potential outliers | Retained |
-| Top-coded values | Retained |
-| Values below the LOD | Retained as provided by NHANES |
-| Redundant variables | Retained |
-| Transformations and scaling | Deferred to subsequent analyses |
-
-General preprocessing addressed confirmed data quality issues while preserving the available biological and clinical information. No research question-specific participant or feature selection was performed. Further preprocessing will depend on the objectives and statistical requirements of subsequent analyses.
-
-## Quality control after preprocessing
-
-## Summary and suitability for further analyssis
-
-<!--
-PURPOSE  Turn the raw NHANES file into ONE clean dataset that Parts 2, 3 and 4
-         all use. Every step is justified by a finding in 01_exploration.
-INPUT    data/raw/NHANES_20212023_merged_filtered_1.csv + codebook
-OUTPUT   data/processed/nhanes_clean.csv     (participants x selected variables)
-         data/processed/variable_info.csv    (one row per kept variable: label, role, transformation)
-OWNER    Person 1
-RULE     Downstream scripts never repeat cleaning steps: if something needs to
-         change, change it HERE and re-knit, so every part uses the same data.
--->
-
-```{r setup, include = FALSE}
-source(here::here("R", "utils.R"))
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
-                      fig.width = 9, fig.height = 5, dpi = 150,
-                      dev = c("png", "cairo_pdf"),
-                      fig.path = file.path(paths$figures, "02_preprocessing", ""))
-```
-
-```{r load}
-nhanes_raw <- load_raw_data()
-codebook   <- load_codebook()
-dim(nhanes_raw)
-```
-
-# Study population
-
-<!-- TODO: which participants are analysed, and why?
-     e.g. examined participants only (RIDSTATR == 2), adults (RIDAGEYR >= 20),
-     pregnant women excluded (RIDEXPRG == 1). Report how many are removed per step. -->
-
-```{r population}
-nhanes_clean <- nhanes_raw   # TODO: filter()
-
-# Keep a log of every step: rows left after each filter (useful for a flow diagram)
-```
-
-# Variable selection
-
-<!-- TODO: drop columns that are not features: survey weights / design variables,
-     comment codes (keep the LOD flags you need first), unit duplicates (SI copies),
-     completely empty variables (BMIHEAD). -->
-
-```{r variables}
-```
-
-# Disguised missing values
-
-<!-- TODO: recode "refused" / "don't know" codes (7/9, 77/99, 777/999, ...) to NA
-     for the variables flagged in 01_exploration section 5.1. -->
-
-```{r special-codes}
-```
-
-# Values below the limit of detection
-
-<!-- TODO: decide per variable: drop variables with > 50 % below LOD; for the
-     others keep the NHANES substitute (LOD / sqrt(2)) and state this. -->
-
-```{r lod}
-```
-
-# Missing values
-
-<!-- TODO: per variable, decide: restrict to the eligible group (structural
-     missingness), complete-case analysis, or imputation (only for non-response,
-     and say which method). Report what you did and how many values it affects. -->
-
-```{r missing}
-```
-
-# Transformations
-
-<!-- TODO: log-transform right-skewed variables (skewness > 1); recode categorical
-     variables as labelled factors (sex, ethnicity, education); average the three
-     blood pressure readings. Standardisation (z-scores) is done later inside the
-     analyses that need it (PCA, ML), not here. -->
-
-```{r transformations}
-```
-
-# Outliers
-
-<!-- TODO: check extremes against related variables (repeated BP readings,
-     glucose vs HbA1c, ...). Remove only proven errors; document every removal. -->
-
-```{r outliers}
-```
-
-# Quality check after preprocessing
-
-<!-- TODO: re-run a PCA / summary on the clean data and compare with 01_exploration:
-     do samples now group by biology rather than by technical factors? -->
-
-```{r qc}
-```
-
-# Save the clean dataset
-
-```{r save}
-dir.create(dirname(paths$clean_data), recursive = TRUE, showWarnings = FALSE)
-write_csv(nhanes_clean, paths$clean_data)
-
-variable_info <- codebook %>% filter(variable %in% names(nhanes_clean))
-write_csv(variable_info, paths$clean_vars)
+summary(nhanes_clean %>%
+          select(mean_SBP, mean_DBP, mean_pulse))
 
 dim(nhanes_clean)
 ```
 
-# Session information
+**Interpretation**
 
-```{r session-info}
-sessionInfo()
+Three new variables were successfully created, each containing 7,518 observed values and 4,415 missing values.
+
+The dataset now contains 11,933 participants and 448 variables. All original measurements and participants were retained.
+
+### Handling top-coded values and LOD
+During the exploratory analysis, age (RIDAGEYR) and the family income-to-poverty ratio (INDFMPIR) were identified as top-coded variables.
+These values were retained because they represent valid observations, although their exact values are unknown above the respective thresholds.
+Laboratory measurements below the limit of detection (LOD) were retained as provided by NHANES, together with their corresponding comment codes.
+Variables with a high proportion of measurements below the LOD will be evaluated separately during feature selection for subsequent analyses.
+No participants or variables were removed, and no additional value substitution was performed during this step.
+
+### Handling outliers
+
+IQR outliers are not automatically errors. As additional plausibility checks, the ranges of key quantitative measurements and agreement between repeated blood pressure readings were examined. The following screening checks flag measurements for review rather than imposing unvalidated clinical exclusion thresholds.
+
+```{r}
+summary(select(nhanes_clean, mean_SBP, mean_DBP, mean_pulse, BMXBMI, BMXHT, BMXWT, BMXWAIST, LBXGH, LBXSGL, LBXTC))
+sum(nhanes_clean$mean_DBP > nhanes_clean$mean_SBP, na.rm = TRUE)
+bp_readings <- nhanes_clean %>% select(BPXOSY1, BPXOSY2, BPXOSY3) %>% drop_na() %>%
+  mutate(range = pmax(BPXOSY1, BPXOSY2, BPXOSY3) - pmin(BPXOSY1, BPXOSY2, BPXOSY3))
+summary(bp_readings$range)
 ```
+
+```{r}
+ggplot(bp_readings, aes(BPXOSY1, BPXOSY3)) + geom_point(alpha = 0.25) +
+  geom_abline(linetype = "dashed") + theme_minimal() +
+  labs(x = "First SBP (mmHg)", y = "Third SBP (mmHg)", title = "Agreement between repeated BP measurements")
+```
+
+```{r}
+ggplot(nhanes_clean, aes(LBXSGL, LBXGH)) + geom_point(alpha = 0.25, na.rm = TRUE) +
+  theme_minimal() + labs(x = "Serum glucose (mg/dL)", y = "HbA1c (%)", title = "Relationship between glucose and HbA1c")
+```
+
+Agreement supports biological plausibility but cannot establish that individual extreme values are error-free. No observations are automatically removed; influential observations will be evaluated in their analysis context.
+
+### Handling missing data
+During the exploratory analysis, substantial missingness was observed across the dataset. A considerable proportion of missing values was related to the NHANES study design, including examination participation, age-dependent eligibility and laboratory testing in specific subpopulations.
+
+Therefore, no global imputation or participant exclusion based on missingness was performed.
+Removing participants or variables based on a general missingness threshold could result in unnecessary loss of information relevant to subsequent analyses.
+Missing data will instead be handled separately in Parts 2, 3 and 4, depending on the selected study population, variables and analytical methods.
+
+### Transformations and scaling
+During the exploratory analysis, several continuous variables showed right-skewed distributions. Furthermore, measurements were expressed in different units and on different numerical scales.
+
+However, the need for transformation and scaling depends on the selected variables and the requirements of the analytical method.
+Therefore, no general transformation or scaling was applied to the working dataset.
+
+For machine learning applications, preprocessing parameters will be estimated using the training data only to prevent data leakage.
+Transformations and scaling will be performed separately when required by subsequent analyses.
+
+### Summary of preprocessing decisions 
+
+The preprocessing steps were based on the findings of the exploratory analysis. The aim was to improve data quality while preserving relevant biological and clinical information.
+
+General data quality issues were addressed, whereas analysis-specific preprocessing decisions were postponed until Parts 2, 3 and 4.
+
+| Data quality issue | Preprocessing decision |
+|---|---|
+| Special response codes | 796 values across 38 variables recoded as NA |
+| Meaningful non-numerical codes | Five indicator variables created to preserve response information |
+| Completely missing variables | One variable removed |
+| Constant variables | One fully constant variable removed; constant variables containing missing values retained |
+| Redundant measurements | 44 alternative unit representations removed |
+| Incorrect variable types | 47 nominal and seven ordinal variables converted into factors |
+| Repeated measurements | Three mean variables created; original measurements retained |
+| Top-coded values | Retained |
+| Values below the LOD | Retained together with their comment codes |
+| Potential outliers | Retained unless identified as erroneous |
+| Missing data | No global imputation or participant exclusion |
+| Skewed distributions and different scales | Transformations and scaling postponed until subsequent analyses |
+
+After preprocessing, the dataset contains 11,933 participants and 448 variables, compared with 11,933 participants and 486 variables in the original dataset.
+
+The original dataset remains unchanged, and no participants were excluded during general preprocessing.
+
+## Quality control after preprocessing
+
+### Data integrity and before/after comparison
+
+```{r}
+stopifnot(identical(nhanes$SEQN, nhanes_clean$SEQN),
+          !anyNA(nhanes_clean$SEQN), !anyDuplicated(nhanes_clean$SEQN))
+tibble(dataset = c("Raw", "Preprocessed"),
+       participants = c(nrow(nhanes), nrow(nhanes_clean)),
+       variables = c(ncol(nhanes), ncol(nhanes_clean)),
+       missing_pct = c(mean(is.na(nhanes)), mean(is.na(nhanes_clean))) * 100)
+```
+
+Overall missingness percentages have different denominators after column selection and should not be interpreted as a direct measure of improvement.
+
+```{r}
+recoding_summary %>% slice_max(n_recoded, n = 10) %>%
+  ggplot(aes(reorder(variable, n_recoded), n_recoded)) + geom_col() + coord_flip() +
+  theme_minimal() + labs(x = NULL, y = "Values recoded to NA", title = "Effect of special-code recoding")
+```
+
+### Biological and technical patterns: PCA
+
+A temporary subset of examined adults is used because routine measurements are more comparable within this population. A broad panel of routine measures is selected independently of the later research question. Complete cases are used only for this exploratory PCA; no changes are made to the shared dataset. Standardisation is necessary because the measurements have different scales. The PCA is descriptive, not a formal test of batch effects.
+
+```{r}
+pca_panel <- c("LBXWBCSI", "LBXHGB", "LBXMCVSI", "LBXPLTSI", "LBXSATSI", "LBXSASSI", "LBXSAL", "LBXSCR", "LBXSGL", "LBXSUA", "LBDHDD", "LBXTC", "LBXSTR", "LBXGH", "LBXHSCRP", "LBXVIDMS", "mean_SBP", "mean_DBP", "BMXBMI", "BMXHT")
+adults <- nhanes_clean %>% filter(RIDSTATR == "Examined", RIDAGEYR >= 20)
+pca_input <- adults %>% select(all_of(pca_panel))
+keep <- complete.cases(pca_input)
+tibble(eligible = nrow(adults), included = sum(keep), excluded = sum(!keep))
+pca <- prcomp(pca_input[keep, ], center = TRUE, scale. = TRUE)
+variance <- 100 * pca$sdev^2 / sum(pca$sdev^2)
+round(variance[1:5], 1)
+```
+
+```{r}
+pca_scores <- as_tibble(pca$x[, 1:2]) %>% mutate(
+  Sex = adults$RIAGENDR[keep],
+  Age = adults$RIDAGEYR[keep],
+  Exam_period = adults$RIDEXMON[keep],
+  Session = adults$PHDSESNZ[keep])
+pca_scores %>% pivot_longer(c(Sex, Exam_period, Session), names_to = "Factor", values_to = "Group", values_transform = list(Group = as.character)) %>%
+  ggplot(aes(PC1, PC2, colour = Group)) + geom_point(alpha = 0.35, size = 0.7) +
+  facet_wrap(~Factor) + theme_minimal() +
+  labs(x = paste0("PC1 (", round(variance[1], 1), "%)"), y = paste0("PC2 (", round(variance[2], 1), "%)"))
+ggplot(pca_scores, aes(PC1, PC2, colour = Age)) + geom_point(alpha = 0.4) + theme_minimal()
+```
+
+```{r}
+sort(abs(pca$rotation[, 1]), decreasing = TRUE)[1:5]
+sort(abs(pca$rotation[, 2]), decreasing = TRUE)[1:5]
+```
+
+**Interpretation to complete after running:** report the included sample size, explained variance, main loadings and whether visible patterns differ by sex, age, period or session. Complete-case selection may affect the observed patterns. Absence of visible separation in the first two PCs does not exclude technical effects, and no global batch correction is justified solely by this plot.
+
+### Technical factors for individual measurements
+
+```{r}
+ggplot(adults, aes(PHDSESNZ, LBXSGL)) + geom_boxplot(na.rm = TRUE) + theme_minimal() + labs(x = "Examination session code", y = "Serum glucose (mg/dL)")
+ggplot(adults, aes(RIDEXMON, LBXVIDMS)) + geom_boxplot(na.rm = TRUE) + theme_minimal() + labs(x = "Examination period", y = "Vitamin D (nmol/L)")
+```
+
+Session is not identical to fasting status. Differences may also reflect population composition or season. Interpret the plots before deciding whether adjustment is appropriate.
+
+## Summary and suitability for further analysis
+
+```{r}
+tibble(variable = pca_panel, available_pct = 100 * colMeans(!is.na(adults[pca_panel])))
+dim(nhanes_clean)
+```
+
+The general working dataset preserves all participants and retains the original clinical scales. Routine measurements may support multivariable analyses, whereas specialised subsamples require additional eligibility, missingness and survey-weight decisions. Cross-sectional associations cannot establish causation. The final sample sizes and model suitability must be determined separately for Parts 2, 3 and 4.
+
+## Saving the preprocessed dataset
+
+The RDS file preserves factor types. The raw CSV files are not overwritten. Run the full document from a fresh session before exporting; finalise the response-code and unit-conversion checks before using the output for submission.
+
+```{r}
+dir.create("data/processed", recursive = TRUE, showWarnings = FALSE)
+saveRDS(nhanes_clean, "data/processed/nhanes_preprocessed.rds")
+```
+
+
+
+
+
+CODE LOTTE: 
+# PREPROCESSING
+
+The exploratory findings above are now translated into concrete preprocessing steps. All steps are applied to a
+**working copy** (`nhanes_clean`); the original dataset `nhanes` is kept unchanged for comparison. Every step is
+justified and summarised in a decision log at the end of Part 1.
+
+```{r}
+nhanes_clean <- nhanes
+dim(nhanes_clean)
+```
+
+## Step 1: Remove completely missing and constant variables
+
+The completely missing variable (`BMIHEAD`) and the 50 constant variables contain no variation, so they cannot
+distinguish between participants. Most constant variables are comment codes that are always 0, which simply means that
+**no** observation of that analyte was below the LOD. This information is documented here, so the columns themselves are not
+needed. Three VOCs (`LBXV1D`, `LBXV3B`, `LBXVTP`) have the same value for every participant (all at the substituted LOD
+value) and are therefore uninformative as well.
+
+```{r}
+empty_vars    <- variable_variation$variable[variable_variation$n_unique == 0]
+constant_vars <- variable_variation$variable[variable_variation$n_unique == 1]
+
+nhanes_clean <- nhanes_clean %>%
+  select(-all_of(c(empty_vars, constant_vars)))
+
+length(empty_vars); length(constant_vars)
+dim(nhanes_clean)
+```
+
+## Step 2: Remove duplicate measurements in different units
+
+The exploration showed that some analytes are stored twice: in conventional units (e.g. mg/dL) and in SI units
+(e.g. mmol/L). To find **all** such pairs systematically rather than one by one, two variables were considered duplicates when:
+
+1. they come from the same NHANES file,
+2. their labels are identical apart from the unit between brackets, and
+3. their values are strongly correlated (r > 0.9).
+
+Of each pair, the SI version (name ending in `SI`) is removed. If neither name ends in `SI`, the second one in the
+codebook is removed. Condition 3 protects against removing different variables that happen to have a similar label
+(e.g. fasting time in hours vs minutes).
+
+```{r}
+unit_pairs <- codebook %>%
+  filter(variable %in% names(nhanes_clean)) %>%
+  mutate(base_label = str_remove(label, "\\s*\\([^()]*\\)\\s*$")) %>%
+  group_by(file, base_label) %>%
+  filter(n() == 2) %>%
+  summarise(var1 = first(variable), var2 = last(variable), .groups = "drop") %>%
+  mutate(
+    correlation = map2_dbl(var1, var2, ~ suppressWarnings(
+      cor(nhanes_clean[[.x]], nhanes_clean[[.y]], use = "complete.obs"))),
+    drop = if_else(str_ends(var1, "SI"), var1, var2)
+  ) %>%
+  filter(!is.na(correlation), correlation > 0.9)
+
+nrow(unit_pairs)
+unit_pairs %>% select(file, var1, var2, correlation, drop) %>% arrange(correlation) %>% head(10)
+
+nhanes_clean <- nhanes_clean %>% select(-all_of(unit_pairs$drop))
+dim(nhanes_clean)
+```
+
+The lowest correlations belong to SI variables that were stored with less precision (serum glucose rounded to whole
+mmol/L, calcium and iron rounded), which confirms that the conventional unit is the better choice.
+
+## Step 3: Survey weights with identical labels
+
+The codebook contains many columns labelled *Phlebotomy 2 Year Weight*. During merging they were renamed
+`WTPH2YR_<file>`. It is important to check whether these are copies of the same weight or genuinely different weights.
+
+```{r}
+weight_vars <- grep("^WTPH2YR", names(nhanes_clean), value = TRUE)
+
+weight_check <- tibble(
+  weight = weight_vars,
+  n_available = colSums(!is.na(nhanes_clean[weight_vars])),
+  identical_to_WTPH2YR = sapply(weight_vars, function(w)
+    isTRUE(all.equal(replace_na(nhanes_clean[[w]], -1), replace_na(nhanes_clean$WTPH2YR, -1))))
+)
+weight_check
+```
+
+Most phlebotomy weights are **not** identical: each laboratory file has its own weight, which corrects for its own
+subsampling and non-response. `WTPH2YR` itself belongs to a small subsample (AGP, ferritin, transferrin receptor).
+Using the wrong weight would give incorrect population estimates. **Decision:** all file-specific weights are
+kept as metadata. A weighted analysis must use the weight of the file its laboratory variable comes from. Exact copies are removed.
+
+```{r}
+exact_copies <- c(weight_check$weight[weight_check$identical_to_WTPH2YR & weight_check$weight != "WTPH2YR"])
+saf_copies <- c("WTSAF2YR_GLU_L", "WTSAF2YR_INS_L")[sapply(c("WTSAF2YR_GLU_L", "WTSAF2YR_INS_L"), function(w)
+  isTRUE(all.equal(replace_na(nhanes_clean[[w]], -1), replace_na(nhanes_clean$WTSAF2YR, -1))))]
+nhanes_clean <- nhanes_clean %>% select(-all_of(c(exact_copies, saf_copies)))
+c(exact_copies, saf_copies)
+dim(nhanes_clean)
+```
+
+## Step 4: Recode special response codes to missing
+
+The screening above showed which variables contain potential special response codes. Based on the variable-specific
+NHANES documentation, the codes below mean *Refused* or *Don't know* and are recoded to `NA`.
+Values that look like codes but are valid answers are **not** recoded. Examples are a household of 7 persons (`DMDHHSIZ`)
+or a value of 9 on the 0–10 drinking-frequency scale (`ALQ121`, where only 77 and 99 are special codes).
+
+```{r}
+special_code_list <- list(
+  c7_9       = list(codes = c(7, 9),
+                    vars = c("DMDEDUC2", "DMQMILIZ", "ALQ111", "ALQ151", "DBQ010", "DBQ330", "DBQ360", "DBQ370",
+                             "DBQ390", "DBQ400", "DBQ421", "DBQ424", "DBQ930", "DBQ935", "DBQ940", "DBQ945",
+                             "ECQ080", "ECQ090", "WHQ030E", "MCQ080E")),
+  c77_99     = list(codes = c(77, 99),
+                    vars = c("DMDMARTZ", "DMDBORN4", "DMDYRUSR", "ALQ121", "ALQ142", "ALQ270", "ALQ280")),
+  c777_999   = list(codes = c(777, 999), vars = c("ALQ130", "ALQ170")),
+  c7777_9999 = list(codes = c(7777, 9999), vars = c("ECD070A", "ECD070B", "DBD381", "DBD411")),
+  c777777    = list(codes = c(777777, 999999), vars = c("DBD030", "DBD041", "DBD050", "DBD055", "DBD061")),
+  c99        = list(codes = 99, vars = "DBQ073A")
+)
+
+recode_log <- map_dfr(special_code_list, function(x) {
+  vars <- intersect(x$vars, names(nhanes_clean))
+  tibble(variable = vars,
+         codes = paste(x$codes, collapse = "/"),
+         n_recoded = sapply(vars, function(v) sum(nhanes_clean[[v]] %in% x$codes)))
+})
+
+for (x in special_code_list) {
+  for (v in intersect(x$vars, names(nhanes_clean))) {
+    nhanes_clean[[v]][nhanes_clean[[v]] %in% x$codes] <- NA
+  }
+}
+
+recode_log %>% filter(n_recoded > 0) %>% arrange(desc(n_recoded))
+sum(recode_log$n_recoded)
+```
+
+## Step 5: Meaningful code 666666 in infant-feeding variables
+
+In the infant-feeding ages (`DBD030`–`DBD061`, in days), the code **666666** does not mean "missing". It means for example
+"still breastfeeding" or "never fed formula". It is not a number of days, so it cannot stay in a numeric variable.
+The information is kept in a separate indicator variable and the numeric value is set to `NA`.
+
+```{r}
+feeding_vars <- c("DBD030", "DBD041", "DBD050", "DBD055", "DBD061")
+
+for (v in feeding_vars) {
+  nhanes_clean[[paste0(v, "_666666")]] <- if_else(is.na(nhanes_clean[[v]]), NA_real_,
+                                                  as.numeric(nhanes_clean[[v]] == 666666))
+  nhanes_clean[[v]][nhanes_clean[[v]] %in% 666666] <- NA
+}
+
+sapply(nhanes_clean[paste0(feeding_vars, "_666666")], sum, na.rm = TRUE)
+```
+
+## Step 6: Labels for categorical variables and general derived variables
+
+Numerically coded categorical variables were converted into labelled factors, so they are treated as categories
+(and not as numbers) in models and plots. A few general variables that are useful for many analyses were also derived:
+
+* **Mean systolic and diastolic blood pressure** of the three oscillometric readings (`SBP`, `DBP`). The exploration
+  showed that the three readings are strongly correlated. Averaging reduces measurement error and avoids redundancy.
+* **Smoking status from serum cotinine** (`SMOKER`): ≥ 3 ng/mL = current tobacco user (Benowitz et al., 2009). Cotinine is
+  an objective biomarker, and self-reported smoking is not available in this dataset.
+* Age groups and WHO BMI categories.
+
+```{r}
+nhanes_clean <- nhanes_clean %>%
+  mutate(
+    SEX  = factor(RIAGENDR, levels = c(1, 2), labels = c("Male", "Female")),
+    RACE = factor(RIDRETH3, levels = c(3, 1, 2, 4, 6, 7),
+                  labels = c("NH White", "Mexican American", "Other Hispanic",
+                             "NH Black", "NH Asian", "Other/Multi")),
+    EDU  = factor(case_when(DMDEDUC2 %in% c(1, 2) ~ "<High school",
+                            DMDEDUC2 == 3 ~ "High school",
+                            DMDEDUC2 == 4 ~ "Some college",
+                            DMDEDUC2 == 5 ~ "College grad"),
+                  levels = c("<High school", "High school", "Some college", "College grad")),
+    EXAM_STATUS = factor(RIDSTATR, levels = c(1, 2), labels = c("Interview only", "Interview and examination")),
+    EXAM_PERIOD = factor(RIDEXMON, levels = c(1, 2), labels = c("Nov-Apr", "May-Oct")),
+    SESSION     = factor(PHDSESNZ, levels = c(0, 1), labels = c("Morning", "Afternoon/Evening")),
+    SBP = rowMeans(cbind(BPXOSY1, BPXOSY2, BPXOSY3), na.rm = TRUE),
+    DBP = rowMeans(cbind(BPXODI1, BPXODI2, BPXODI3), na.rm = TRUE),
+    SBP = if_else(is.nan(SBP), NA_real_, SBP),
+    DBP = if_else(is.nan(DBP), NA_real_, DBP),
+    SMOKER = if_else(is.na(LBXCOT), NA_real_, as.numeric(LBXCOT >= 3)),
+    AGEGRP = cut(RIDAGEYR, breaks = c(-1, 5, 12, 17, 39, 59, 80),
+                 labels = c("0-5", "6-12", "13-17", "18-39", "40-59", "60+")),
+    BMICAT = cut(BMXBMI, breaks = c(0, 18.5, 25, 30, Inf), right = FALSE,
+                 labels = c("Underweight", "Normal", "Overweight", "Obese"))
+  )
+
+summary(select(nhanes_clean, SEX, RACE, EDU, EXAM_PERIOD, SESSION, AGEGRP, BMICAT))
+mean(nhanes_clean$SMOKER, na.rm = TRUE)
+```
+
+## Step 7: Technical errors or biology? Plausibility checks
+
+The IQR rule in the exploration flags many observations as outliers in skewed variables, but that does not show whether
+a value is *wrong*. Three additional checks distinguish technical errors from biology:
+
+1. **Physiologically impossible values** (hard plausibility limits): these would point to measurement or data-entry errors.
+2. **Consistency of repeated measurements**: the three systolic blood pressure readings.
+3. **Coherence between two independent measurements**: extreme glucose values should agree with HbA1c.
+
+```{r}
+plausible_limits <- tribble(
+  ~variable,  ~lower, ~upper,
+  "SBP",      60,     260,
+  "DBP",      20,     160,
+  "BMXBMI",   10,     90,
+  "BMXHT",    40,     220,
+  "BMXWT",    2,      300,
+  "BMXWAIST", 40,     200,
+  "LBXHGB",   4,      22,
+  "LBXGH",    3,      18,
+  "LBXSGL",   20,     1000,
+  "LBXTC",    50,     600
+)
+
+plausible_limits %>%
+  mutate(n_implausible = pmap_int(list(variable, lower, upper), function(v, lo, hi)
+    sum(nhanes_clean[[v]] < lo | nhanes_clean[[v]] > hi, na.rm = TRUE)))
+```
+
+```{r}
+bp_readings <- nhanes_clean %>%
+  select(BPXOSY1, BPXOSY2, BPXOSY3) %>%
+  drop_na() %>%
+  mutate(range = pmax(BPXOSY1, BPXOSY2, BPXOSY3) - pmin(BPXOSY1, BPXOSY2, BPXOSY3))
+
+summary(bp_readings$range)
+sum(bp_readings$range > 30)
+mean(bp_readings$range > 30) * 100
+
+ggplot(bp_readings, aes(x = BPXOSY1, y = BPXOSY3, colour = range > 30)) +
+  geom_point(alpha = 0.3, size = 0.6) +
+  geom_abline(linetype = "dashed") +
+  scale_colour_manual(values = c("steelblue", "red"), labels = c("≤ 30 mmHg", "> 30 mmHg")) +
+  labs(
+    title = "Agreement between the first and third systolic blood pressure reading",
+    x = "Systolic BP, reading 1 (mmHg)",
+    y = "Systolic BP, reading 3 (mmHg)",
+    colour = "Range of 3 readings"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(nhanes_clean %>% filter(RIDAGEYR >= 20), aes(x = LBXSGL, y = LBXGH)) +
+  geom_point(alpha = 0.3, size = 0.6, colour = "steelblue", na.rm = TRUE) +
+  labs(
+    title = "Extreme glucose values agree with HbA1c",
+    x = "Serum glucose (mg/dL)",
+    y = "Glycohemoglobin, HbA1c (%)"
+  ) +
+  theme_minimal()
+
+nhanes_clean %>% slice_max(LBXSGL, n = 3) %>% select(SEQN, RIDAGEYR, LBXSGL, LBXGH)
+```
+
+No values outside the physiological limits were found in the key variables. The three blood pressure readings agree
+closely: only a very small percentage differs by more than 30 mmHg (e.g. white-coat effect or movement), and averaging softens
+these. Participants with extreme glucose values also have very high HbA1c, so two independent measurements agree. This
+indicates **uncontrolled diabetes (biology), not a measurement error**.
+
+**Decision:** outliers are **not removed**. Removing genuine extreme values would bias analyses, because people with
+disease are part of the population of interest. Instead, skewed variables are log-transformed where needed, and the
+influence of extreme observations is checked within each statistical model (e.g. Cook's distance).
+
+## Step 8: Transformation and standardisation
+
+The exploration showed strongly right-skewed laboratory variables (CRP, triglycerides, HbA1c) and a more symmetric
+distribution after log transformation. To make this systematic, skewness was calculated for all continuous variables.
+
+```{r}
+skewness <- function(x) {
+  x <- x[!is.na(x)]
+  mean((x - mean(x))^3) / sd(x)^3
+}
+
+continuous_vars <- variable_types %>%
+  filter(type == "continuous", variable %in% names(nhanes_clean)) %>%
+  pull(variable)
+continuous_vars <- continuous_vars[colSums(!is.na(nhanes_clean[continuous_vars])) > 500]
+
+skew_table <- tibble(
+  variable = continuous_vars,
+  skewness = sapply(nhanes_clean[continuous_vars], skewness),
+  all_positive = sapply(nhanes_clean[continuous_vars], function(x) all(x > 0, na.rm = TRUE))
+) %>%
+  left_join(codebook %>% select(variable, label), by = "variable") %>%
+  arrange(desc(skewness))
+
+sum(abs(skew_table$skewness) > 1)
+head(skew_table, 10)
+```
+
+```{r}
+example_vars <- c("LBXCOT", "LBXHSCRP", "LBXSTR", "LBXGH")
+
+nhanes_clean %>%
+  filter(RIDSTATR == 2, RIDAGEYR >= 20) %>%
+  select(all_of(example_vars)) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+  filter(!is.na(value), value > 0) %>%
+  ggplot(aes(x = log(value))) +
+  geom_histogram(bins = 40, fill = "steelblue", colour = "white") +
+  facet_wrap(~ variable, scales = "free", nrow = 1) +
+  labs(
+    title = "Selected skewed variables on the log scale",
+    x = "log(value)",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+* Serum cotinine is **bimodal** on the log scale: non-smokers (low values) and tobacco users (high values). This is
+  biology, and it supports the derived `SMOKER` variable.
+* CRP and triglycerides become approximately symmetric after a log transformation.
+* HbA1c remains skewed after log transformation, because of a real subgroup (people with diabetes).
+
+**Decision:** right-skewed (|skewness| > 1), strictly positive variables are analysed on the **log scale** when an analysis
+requires it (e.g. linear models, PCA). The transformation is applied within each analysis, so the original values remain
+interpretable in the dataset. For multivariable methods that combine variables with different units (PCA, clustering), the
+variables are also **standardised** (z-scores). Otherwise variables with large units would dominate.
+
+## Step 9: Handling of missing values
+
+Based on the missing data analysis:
+
+* **No global imputation.** Most missing values are structural (not applicable for age or sex) or caused by the design
+  (no examination, random subsamples such as the fasting subsample). Imputing, for example, education for children or
+  fasting glucose for afternoon participants would create information that does not exist.
+* Each analysis first selects its **analysis population** (e.g. examined adults), and then uses complete cases for the
+  variables it needs. Excluded and included participants are compared to check whether this introduces bias.
+* For covariates with non-trivial missingness, a sensitivity analysis (e.g. missing indicator) is performed.
+
+# CLUSTERING: BIOLOGY OR TECHNICAL FACTORS?
+
+To check whether participants group by biological characteristics or by technical factors, a principal component
+analysis (PCA) was performed on a core panel of routine laboratory and body measurements that are available for almost
+all **examined adults (≥ 20 years)**. These include blood count, biochemistry, lipids, HbA1c, CRP, blood metals, vitamin D,
+blood pressure and anthropometry.
+
+Steps: log transformation of skewed variables → exclusion of participants missing more than 20% of the panel → median
+imputation of the remaining gaps (**for the PCA only**) → standardisation → PCA.
+
+The participants were then coloured by **biological** factors (sex, age, smoking) and **technical/design** factors:
+the exam period (November–April vs May–October; the mobile examination centres also travel to different regions per season)
+and the examination session (morning participants were asked to fast). The proportion of variance of each principal
+component explained by each factor was quantified with η² (one-way ANOVA).
+
+```{r}
+pca_panel <- c("LBXWBCSI", "LBXLYPCT", "LBXNEPCT", "LBXRBCSI", "LBXHGB", "LBXMCVSI", "LBXRDW", "LBXPLTSI",
+               "LBXMPSI", "LBXSATSI", "LBXSASSI", "LBXSAPSI", "LBXSAL", "LBXSBU", "LBXSCR", "LBXSUA", "LBXSGL",
+               "LBXSGTSI", "LBXSTP", "LBXSIR", "LBXSCK", "LBXSCA", "LBXSPH", "LBXSNASI", "LBXSKSI", "LBDHDD",
+               "LBXTC", "LBXSTR", "LBXGH", "LBXHSCRP", "LBXBPB", "LBXBCD", "LBXTHG", "LBXBSE", "LBXBMN",
+               "LBXVIDMS", "LBXCOT", "SBP", "DBP", "BMXBMI", "BMXWAIST", "BMXHT")
+
+adults <- nhanes_clean %>% filter(RIDSTATR == 2, RIDAGEYR >= 20)
+pca_data <- adults[pca_panel]
+
+for (v in pca_panel) {
+  if (skewness(pca_data[[v]]) > 1 && all(pca_data[[v]] > 0, na.rm = TRUE)) pca_data[[v]] <- log(pca_data[[v]])
+}
+
+keep <- rowMeans(is.na(pca_data)) <= 0.2
+pca_data <- pca_data[keep, ] %>%
+  mutate(across(everything(), ~ replace_na(.x, median(.x, na.rm = TRUE))))
+pca_meta <- adults[keep, ]
+
+pca <- prcomp(pca_data, center = TRUE, scale. = TRUE)
+variance_explained <- 100 * pca$sdev^2 / sum(pca$sdev^2)
+
+nrow(pca_data); sum(!keep)
+round(variance_explained[1:6], 1)
+sort(abs(pca$rotation[, 1]), decreasing = TRUE)[1:6]
+sort(abs(pca$rotation[, 2]), decreasing = TRUE)[1:6]
+```
+
+```{r}
+pca_scores <- as_tibble(pca$x[, 1:5]) %>%
+  mutate(
+    Sex = pca_meta$SEX,
+    `Age group` = droplevels(pca_meta$AGEGRP),
+    Smoking = factor(pca_meta$SMOKER, levels = c(0, 1), labels = c("Non-smoker", "Smoker")),
+    `Race/ethnicity` = pca_meta$RACE,
+    `Exam period` = pca_meta$EXAM_PERIOD,
+    Session = pca_meta$SESSION
+  )
+
+eta_squared <- function(y, group) {
+  ok <- !is.na(group)
+  y <- y[ok]; group <- group[ok]
+  sum(tapply(y, group, function(z) length(z) * (mean(z) - mean(y))^2), na.rm = TRUE) / sum((y - mean(y))^2)
+}
+
+pca_factors <- c("Sex", "Age group", "Smoking", "Race/ethnicity", "Exam period", "Session")
+eta_table <- expand_grid(factor = pca_factors, PC = paste0("PC", 1:5)) %>%
+  mutate(eta2 = map2_dbl(factor, PC, ~ 100 * eta_squared(pca_scores[[.y]], pca_scores[[.x]])))
+
+eta_table %>%
+  pivot_wider(names_from = PC, values_from = eta2) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)))
+```
+
+```{r, fig.width = 12, fig.height = 8}
+pca_plot <- function(f) {
+  ggplot(pca_scores %>% filter(!is.na(.data[[f]])), aes(x = PC1, y = PC2, colour = .data[[f]])) +
+    geom_point(alpha = 0.4, size = 0.5) +
+    guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    labs(
+      title = f,
+      x = paste0("PC1 (", round(variance_explained[1], 1), "%)"),
+      y = paste0("PC2 (", round(variance_explained[2], 1), "%)"),
+      colour = NULL
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+(pca_plot("Sex") | pca_plot("Age group") | pca_plot("Smoking")) /
+  (pca_plot("Exam period") | pca_plot("Session") | pca_plot("Race/ethnicity"))
+```
+
+```{r}
+ggplot(eta_table, aes(x = PC, y = factor(factor, levels = rev(pca_factors)), fill = eta2)) +
+  geom_tile() +
+  geom_text(aes(label = round(eta2, 1))) +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(
+    title = "Percentage of variance of each principal component explained by each factor (η²)",
+    x = NULL,
+    y = NULL,
+    fill = "η² (%)"
+  ) +
+  theme_minimal()
+```
+
+**Interpretation.** The first principal components are driven by **biology**. PC1 is an adiposity/metabolic axis (high
+loadings for waist, BMI, GGT, CRP, triglycerides and HDL). This is a continuous gradient rather than separate clusters. The
+sexes are separated mainly along PC2 (haemoglobin, iron, albumin, ALT and height are higher in men), and age along PC3.
+The technical and design factors (exam period, session) explain **less than 1%** of the variance of the first components.
+So there is no batch-like clustering, and a global batch correction is not needed.
+
+## Technical factors per variable
+
+Although technical factors do not drive the global structure, they can still affect **individual** variables.
+Glucose and triglycerides depend on fasting, and vitamin D depends on sunlight (season).
+
+```{r, fig.width = 11, fig.height = 4}
+p_glu <- ggplot(adults %>% filter(!is.na(SESSION)), aes(x = SESSION, y = LBXSGL)) +
+  geom_boxplot(fill = "steelblue", outlier.shape = NA) +
+  coord_cartesian(ylim = c(60, 200)) +
+  labs(title = "Glucose by session", x = NULL, y = "Serum glucose (mg/dL)") +
+  theme_minimal()
+p_tg <- ggplot(adults %>% filter(!is.na(SESSION)), aes(x = SESSION, y = log(LBXSTR))) +
+  geom_boxplot(fill = "steelblue", outlier.shape = NA) +
+  labs(title = "Triglycerides by session", x = NULL, y = "log triglycerides") +
+  theme_minimal()
+p_vd <- ggplot(adults %>% filter(!is.na(EXAM_PERIOD)), aes(x = EXAM_PERIOD, y = LBXVIDMS)) +
+  geom_boxplot(fill = "steelblue", outlier.shape = NA) +
+  coord_cartesian(ylim = c(0, 200)) +
+  labs(title = "Vitamin D by exam period", x = NULL, y = "25(OH)D (nmol/L)") +
+  theme_minimal()
+p_glu | p_tg | p_vd
+
+wilcox.test(LBXSGL ~ SESSION, data = adults)$p.value
+wilcox.test(LBXSTR ~ SESSION, data = adults)$p.value
+wilcox.test(LBXVIDMS ~ EXAM_PERIOD, data = adults)$p.value
+```
+
+Glucose and triglycerides are higher in the afternoon session (non-fasting), and vitamin D differs between exam periods.
+**Decision:** analyses of fasting-sensitive or seasonal variables must account for session (or use the fasting subsample) or
+exam period. Variables that do not depend on these factors need no correction.
+
+# SUITABILITY OF THE PREPROCESSED DATASET
+
+```{r}
+adults_core <- c("SBP", "BMXBMI", "BMXWAIST", "LBXGH", "LBXTC", "LBXHGB", "LBXCOT", "LBXBCD", "EDU")
+round(100 * colMeans(!is.na(adults[adults_core])), 1)
+```
+
+* For **examined adults (≥ 20 years)** the core clinical variables are available for most participants (see percentages
+  above). That is several thousand participants, enough for multivariable regression with many explanatory variables.
+* Variables from subsamples (fasting glucose, insulin, LDL, PFAS, VOCs) are available for fewer participants (about 1,000–2,500)
+  and require their own subsample weights.
+* **Limitations:** no medication data (e.g. antihypertensive, cholesterol-lowering or diabetes medication), no
+  self-reported disease or smoking, a cross-sectional design (no causal conclusions), and top-coding of age and income.
+* NHANES uses a complex survey design. Unweighted analyses describe the sample, and weighted analyses (weights, strata, PSU)
+  are needed for statements about the US population.
+
+The preprocessed dataset is therefore suitable for multivariable questions in examined adults that combine demographic,
+examination and routine laboratory variables.
+
+## Decision log
+
+| # | Step | Decision | Justification |
+|---|---|---|---|
+| 1 | Completely missing and constant variables | Removed | No variation, no information |
+| 2 | Duplicate measurements in different units | SI version removed | Same information; SI versions sometimes rounded (glucose) |
+| 3 | Survey weights with identical labels | File-specific weights kept, exact copies removed | Weights differ between files |
+| 4 | Special response codes | Recoded to NA per variable, based on documentation | Refused / don't know are not measurements |
+| 5 | Code 666666 (infant feeding) | Separate indicator + NA | Meaningful category, not a number |
+| 6 | Categorical codes | Converted to labelled factors | Treated as categories, not numbers |
+| 7 | Derived variables | Mean SBP/DBP, smoker (cotinine ≥ 3 ng/mL), age and BMI groups | Less measurement error; objective exposure |
+| 8 | Top-coded values (age, income) | Retained | Not errors; considered in interpretation |
+| 9 | Values below the LOD | Retained as LOD/√2; analytes with > 50% below LOD flagged as less informative | Censored values |
+| 10 | Outliers | Retained; plausibility checked; influence checked in models | Extreme values reflect biology |
+| 11 | Skewed variables | Log-transformed within analyses | More symmetric, multiplicative scale |
+| 12 | Scale differences | Standardised (z-scores) for PCA / clustering | Comparable units |
+| 13 | Missing values | No global imputation; analysis population + complete cases + sensitivity analysis | Mostly structural or by design |
+| 14 | Technical factors | No global correction; session/season considered per variable | < 1% of global variance |
+
+## Saving the preprocessed dataset
+
+```{r}
+saveRDS(nhanes_clean, "nhanes_preprocessed.rds")
+dim(nhanes)
+dim(nhanes_clean)
+```
+
+
+
